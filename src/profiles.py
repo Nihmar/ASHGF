@@ -1,7 +1,21 @@
-import os
-from os import path
-from typing import Dict, List
+"""
+Performance profile runner for optimization algorithms.
 
+Results are stored in Parquet format for efficiency.
+
+Usage:
+    python profiles.py --n-runs 10 --workers 4
+"""
+
+import argparse
+import os
+import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
+from os import path
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
 import pandas as pd
 
 from optimizers.gd import GD
@@ -10,15 +24,13 @@ from optimizers.asebo import ASEBO
 from optimizers.asgf import ASGF
 from optimizers.ashgf import ASHGF
 
-# Note: The original code referenced 'code/results' relative to the script location.
-# Since this script is in 'src/', we adjust the path to be relative to the project root.
-if path.exists(path.join('..', 'results')):
-    main_folder = path.join('..', 'results', 'profiles')
-else:
-    main_folder = path.join('results', 'profiles')
+
+warnings.filterwarnings("default")
+
+RESULTS_DIR = path.join("results", "profiles")
 debug_it = 100
 debug = False
-tau = 10**(-3)
+tau = 10 ** (-3)
 it = 10000
 dims = [10, 100, 1000]
 algorithms: Dict[str, type] = {
@@ -26,156 +38,350 @@ algorithms: Dict[str, type] = {
     "SGES": SGES,
     "ASGF": ASGF,
     "ASHGF": ASHGF,
-    "ASEBO": ASEBO
+    "ASEBO": ASEBO,
 }
 
 
-def get_functions() -> List[str]:
-    """
-    Get list of function names from functions.txt.
+@dataclass
+class ExperimentResult:
+    """Result of a single experiment run."""
+    function: str
+    algorithm: str
+    run: int
+    values: List[float]
+    status: str
+    error_msg: Optional[str] = None
+    warnings: Optional[str] = None
 
-    Returns:
-        List of function names.
-    """
-    lines = []
-    # Adjust path to be relative to the project root
-    file_path = path.join('..', 'functions.txt')
+
+def get_functions() -> List[str]:
+    """Get list of function names from functions.txt."""
+    file_path = path.join("src", "functions.txt")
     if not path.exists(file_path):
-        # Fallback to src directory
-        file_path = path.join('src', 'functions.txt')
-    if not path.exists(file_path):
-        # Fallback to current directory
-        file_path = 'functions.txt'
-    
+        file_path = "functions.txt"
+
     with open(file_path) as f:
         lines = f.readlines()
 
     fs = []
     for line in lines:
-        if '*' in line:
-            fs.append(line.replace('*', '').strip())
+        if "*" in line:
+            fs.append(line.replace("*", "").strip())
 
     return fs
 
 
+def get_parquet_path(dim: int) -> str:
+    """Get path to the Parquet file for a given dimension."""
+    return path.join(RESULTS_DIR, f"dim={dim}", "results.parquet")
+
+
+def load_results(dim: int) -> pd.DataFrame:
+    """Load results for a given dimension from Parquet."""
+    parquet_path = get_parquet_path(dim)
+    if path.exists(parquet_path):
+        return pd.read_parquet(parquet_path)
+    return pd.DataFrame(columns=["function", "algorithm", "run", "values"])
+
+
+def save_results(df: pd.DataFrame, dim: int) -> None:
+    """Save results DataFrame to Parquet file."""
+    output_path = get_parquet_path(dim)
+    os.makedirs(path.dirname(output_path), exist_ok=True)
+    df.to_parquet(output_path, index=False)
+
+
 def create_folders() -> None:
+    """Create necessary folders for storing results."""
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+
+def run_single_experiment(
+    function: str,
+    algorithm_name: str,
+    dim: int,
+    run: int,
+    seed: int,
+) -> ExperimentResult:
     """
-    Create necessary folders for storing results.
-    """
-    functions = get_functions()
-
-    if not path.exists(main_folder):
-        os.makedirs(main_folder)
-
-    for dim in dims:
-        dim_folder = path.join(main_folder, str(dim))
-        if not path.exists(dim_folder):
-            os.mkdir(dim_folder)
-
-        for function in functions:
-            func_folder = path.join(dim_folder, function)
-            if not path.exists(func_folder):
-                os.mkdir(func_folder)
-
-            for algorithm in algorithms.keys():
-                algo_folder = path.join(func_folder, algorithm)
-                if not path.exists(algo_folder):
-                    os.mkdir(algo_folder)
-
-
-def evaluations(it: int, dim: int, name: str) -> int:
-    """
-    Calculate the number of function evaluations for an algorithm.
-
-    Args:
-        it: Number of iterations.
-        dim: Dimension of the problem.
-        name: Name of the algorithm.
-
-    Returns:
-        Number of function evaluations.
-    """
-    correction = 1
-
-    if name in ["ASGF", "ASHGF"]:
-        return it + it * dim * 4
-    else:
-        return (it + it * dim * 2) * correction
-
-
-def iterations(evs: int, dim: int, name: str) -> int:
-    """
-    Calculate the number of iterations from function evaluations.
-
-    Args:
-        evs: Number of function evaluations.
-        dim: Dimension of the problem.
-        name: Name of the algorithm.
-
-    Returns:
-        Number of iterations.
-    """
-    if name in ["ASGF", "ASHGF"]:
-        return int(evs / (1 + dim * 4))
-    else:
-        return int(evs / (1 + dim * 2))
-
-
-def execute_algorithm(function: str, dim: int, name: str, algorithm: type):
-    """
-    Execute an optimization algorithm on a function.
-
-    Args:
-        function: Name of the function to optimize.
-        dim: Dimension of the problem.
-        name: Name of the algorithm.
-        algorithm: Algorithm class.
-
-    Returns:
-        Tuple of (best_values, all_values).
-    """
-    if name not in ["ASGF", "ASHGF"]:
-        alg = algorithm(1e-4, 1e-4)
-    else:
-        alg = algorithm()
-    alg_best, alg_all = alg.optimize(function, dim, it, None, debug, debug_it)
-
-    return alg_best, alg_all
-
-
-def save_data(function: str, dim: int, name: str, algorithm: type) -> None:
-    """
-    Save optimization results to CSV.
+    Run a single experiment. This function runs in a separate process.
 
     Args:
         function: Name of the function.
-        dim: Dimension of the problem.
-        name: Name of the algorithm.
-        algorithm: Algorithm class.
-    """
-    alg_best, alg_all = execute_algorithm(function, dim, name, algorithm)
+        algorithm_name: Name of the algorithm.
+        dim: Problem dimension.
+        run: Run number.
+        seed: Random seed.
 
-    series = pd.Series(alg_all, name="descent")
-    results_path = path.join("results", "profiles", str(dim), function, name, "descent.csv")
-    series.to_csv(results_path, header=True, index=False)
+    Returns:
+        ExperimentResult with values or error info.
+    """
+    try:
+        algorithm = algorithms[algorithm_name]
+        x_0 = np.random.default_rng(seed).standard_normal(dim)
+
+        if algorithm_name not in ["ASGF", "ASHGF"]:
+            alg = algorithm(1e-4, 1e-4)
+        else:
+            alg = algorithm()
+
+        warning_msgs = []
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            alg_best, alg_all = alg.optimize(function, dim, it, x_0, debug, debug_it)
+
+            if w:
+                warning_msgs = [
+                    f"{warning.category.__name__}: {warning.message}"
+                    for warning in w
+                ]
+
+        return ExperimentResult(
+            function=function,
+            algorithm=algorithm_name,
+            run=run,
+            values=alg_all,
+            status="success",
+            warnings="\n".join(warning_msgs) if warning_msgs else None,
+        )
+
+    except Exception as e:
+        return ExperimentResult(
+            function=function,
+            algorithm=algorithm_name,
+            run=run,
+            values=[],
+            status="failed",
+            error_msg=str(e),
+        )
+
+
+def get_tasks(
+    dim: int,
+    n_runs: int,
+    seed: int,
+    overwrite: bool,
+) -> List[Tuple[str, str, int, int, int]]:
+    """Generate list of experiments to run."""
+    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
+    fs = get_functions()
+    results = load_results(dim)
+
+    tasks = []
+    for name in algorithms.keys():
+        for function in fs:
+            existing = results[
+                (results["function"] == function)
+                & (results["algorithm"] == name)
+            ]
+            existing_runs = set(existing["run"].tolist() if len(existing) > 0 else [])
+
+            for run in range(n_runs):
+                if not overwrite and run in existing_runs:
+                    continue
+
+                task_seed = int(rng.integers(0, 10000))
+                tasks.append((function, name, dim, run, task_seed))
+
+    return tasks
+
+
+def run_experiments(
+    dim: int,
+    n_runs: int = 10,
+    seed: int = 0,
+    overwrite: bool = False,
+    n_workers: int = 4,
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    Run experiments for a single dimension using parallel processing.
+
+    Args:
+        dim: Problem dimension.
+        n_runs: Number of runs per algorithm/function.
+        seed: Random seed.
+        overwrite: Whether to overwrite existing results.
+        n_workers: Number of parallel workers.
+        verbose: Print progress.
+
+    Returns:
+        DataFrame with all results.
+    """
+    tasks = get_tasks(dim, n_runs, seed, overwrite)
+
+    if not tasks:
+        print(f"All experiments already completed for dim={dim}")
+        return load_results(dim)
+
+    print(f"Running {len(tasks)} experiments for dim={dim} with {n_workers} workers...")
+
+    results = load_results(dim)
+    completed = 0
+    failed = 0
+
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {
+            executor.submit(run_single_experiment, *task): task
+            for task in tasks
+        }
+
+        for future in as_completed(futures):
+            task = futures[future]
+            function, algorithm_name, _, run, _ = task
+
+            try:
+                result = future.result()
+
+                if result.status == "success":
+                    new_row = pd.DataFrame([{
+                        "function": result.function,
+                        "algorithm": result.algorithm,
+                        "run": result.run,
+                        "values": result.values,
+                    }])
+                    results = pd.concat([results, new_row], ignore_index=True)
+
+                    if verbose:
+                        if result.warnings:
+                            print(f"[{algorithm_name}] {function} run {run}: OK ({len(result.warnings.split(chr(10)))} warnings)")
+                        else:
+                            print(f"[{algorithm_name}] {function} run {run}: OK")
+                else:
+                    failed += 1
+                    if verbose:
+                        print(f"[{algorithm_name}] {function} run {run}: FAILED - {result.error_msg}")
+
+            except Exception as e:
+                failed += 1
+                if verbose:
+                    print(f"[{algorithm_name}] {function} run {run}: ERROR - {e}")
+
+            completed += 1
+            if completed % 10 == 0:
+                print(f"Progress: {completed}/{len(tasks)} ({failed} failed)")
+
+    save_results(results, dim)
+    print(f"Completed: {completed - failed} success, {failed} failed")
+    return results
+
+
+def run_all_experiments(
+    n_runs: int = 10,
+    seed: int = 0,
+    overwrite: bool = False,
+    dims_to_run: Optional[List[int]] = None,
+    n_workers: int = 4,
+) -> None:
+    """Run all experiments across all dimensions."""
+    create_folders()
+
+    if dims_to_run is None:
+        dims_to_run = dims
+
+    for dim in dims_to_run:
+        print(f"\n{'='*50}")
+        print(f"Running experiments for dim={dim}")
+        print(f"{'='*50}\n")
+        run_experiments(dim, n_runs, seed, overwrite, n_workers)
+
+
+def analyze_results(dim: int) -> pd.DataFrame:
+    """Analyze results for a given dimension."""
+    df = load_results(dim)
+
+    if df.empty:
+        print(f"No results found for dim={dim}")
+        return df
+
+    summary = []
+    for (func, alg), group in df.groupby(["function", "algorithm"]):
+        all_values = group["values"].tolist()
+        final_values = [v[-1] if len(v) > 0 else np.nan for v in all_values]
+        min_values = [np.min(v) if len(v) > 0 else np.nan for v in all_values]
+
+        summary.append(
+            {
+                "function": func,
+                "algorithm": alg,
+                "n_runs": len(all_values),
+                "mean_final": np.mean(final_values),
+                "std_final": np.std(final_values),
+                "min_final": np.min(final_values),
+                "max_final": np.max(final_values),
+                "mean_best": np.mean(min_values),
+            }
+        )
+
+    return pd.DataFrame(summary)
 
 
 def main() -> None:
-    """
-    Main function to run performance profiles.
-    """
-    fs = get_functions()
-    create_folders()
+    """Main function to run performance profiles."""
+    parser = argparse.ArgumentParser(
+        description="Run performance profiles with parallel execution"
+    )
+    parser.add_argument(
+        "--n-runs",
+        type=int,
+        default=10,
+        help="Number of runs per experiment (default: 10)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Random seed (default: 0)",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing results",
+    )
+    parser.add_argument(
+        "--dims",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Specific dimensions to run (default: all)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="Number of parallel workers (default: 4)",
+    )
+    parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="Analyze and print summary",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Reduce output verbosity",
+    )
 
-    for dim in dims:
-        for name, algorithm in algorithms.items():
-            for function in fs:
-                # Check if results file already exists
-                result_file = path.join(main_folder, str(dim), function, name, "descent.csv")
-                if not path.exists(result_file):
-                    save_data(function, dim, name, algorithm)
+    args = parser.parse_args()
 
-                print(f"Done with: {name} - {function} - {dim}")
+    if args.analyze:
+        for dim in dims:
+            print(f"\n{'='*50}")
+            print(f"Summary for dim={dim}")
+            print(f"{'='*50}")
+            summary = analyze_results(dim)
+            if not summary.empty:
+                print(summary.to_string(index=False))
+    else:
+        run_all_experiments(
+            n_runs=args.n_runs,
+            seed=args.seed,
+            overwrite=args.overwrite,
+            dims_to_run=args.dims,
+            n_workers=args.workers,
+        )
 
 
 if __name__ == "__main__":

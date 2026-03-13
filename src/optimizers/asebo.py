@@ -138,6 +138,7 @@ class ASEBO(BaseOptimizer):
             G_clean = G[~np.isnan(G).any(axis=1)]
             if len(G_clean) < 2:
                 UUT = np.zeros([len(x), len(x)])
+                UUT_ort = np.zeros([len(x), len(x)])
                 alpha = 1
                 n_samples = 100
             else:
@@ -152,12 +153,15 @@ class ASEBO(BaseOptimizer):
 
                 U = pca_fit.components_[:n_samples]
                 UUT = np.matmul(U.T, U)
+                U_ort = pca_fit.components_[n_samples:]
+                UUT_ort = np.matmul(U_ort.T, U_ort)
 
                 if i == self.k:
                     n_samples = 100
 
         else:
             UUT = np.zeros([len(x), len(x)])
+            UUT_ort = np.zeros([len(x), len(x)])
             alpha = 1
             n_samples = 100
 

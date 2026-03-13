@@ -1,119 +1,323 @@
+"""
+Statistical plotting script for optimization algorithm comparison.
+
+This script loads results from Parquet files and generates convergence plots.
+"""
+
+import argparse
 import os
-import pickle
-from typing import Dict, List
+from os import path
+from typing import Dict, List, Optional
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
-from optimizers.gd import GD
-from optimizers.sges import SGES
-from optimizers.asebo import ASEBO
-from optimizers.asgf import ASGF
-from optimizers.ashgf import ASHGF
 
-# Note: The original code referenced 'code/results' relative to the script location.
-# Since this script is in 'src/', we adjust the path to be relative to the project root.
-np.random.seed(0)
-
-it = 10000
-debug_it = 100
-debug = True
-dim = 100
-x_0 = np.random.randn(dim)
-
-functions: List[str] = ["sphere", "levy", "rastrigin", "ackley"]
-
-algorithms: Dict[str, type] = {
-    "GD": GD,
-    "SGES": SGES,
-    "ASGF": ASGF,
-    "ASHGF": ASHGF,
-    "ASEBO": ASEBO
-}
-
-for algorithm in algorithms:
-    for function in functions:
-        bests = []
-
-        # Adjust path to be relative to the project root
-        results_dir = os.path.join("..", "results", "stats", algorithm)
-        if not os.path.exists(results_dir):
-            os.makedirs(results_dir)
-        
-        pkl_file = os.path.join(results_dir, f"descents_{function}.pkl")
-
-        if not os.path.exists(pkl_file):
-            for i in range(100):
-                print(i)
-                r_seed = np.random.randint(0, 10000)
-                alg = algorithms[algorithm](seed=r_seed)
-                alg_best, alg_all = alg.optimize(function, dim, it, x_0, debug, debug_it)
-                bests.append(alg_all)
-
-            with open(pkl_file, "wb") as output:
-                pickle.dump(bests, output)
-
-        print(f"Finished {function} for algorithm {algorithm}")
+DEFAULT_FUNCTIONS: List[str] = ["sphere", "levy", "rastrigin", "ackley"]
+DEFAULT_DIM: int = 100
+DEFAULT_ALGORITHMS: List[str] = ["GD", "SGES", "ASGF", "ASHGF", "ASEBO"]
 
 
-for algorithm in algorithms:
-    for function in functions:
-        # Adjust path to be relative to the project root
-        results_dir = os.path.join("..", "results", "stats", algorithm)
-        pkl_file = os.path.join(results_dir, f"descents_{function}.pkl")
-        
-        convergence_plot = os.path.join(results_dir, f"{function}_convergence.png")
-        convergence_mean_plot = os.path.join(results_dir, f"{function}_convergence_mean.png")
+def get_results_path(dim: int) -> str:
+    """Get path to results Parquet file for a given dimension."""
+    return os.path.join("results", "profiles", f"dim={dim}", "results.parquet")
 
-        if not os.path.exists(convergence_plot):
-            with open(pkl_file, "rb") as f:
-                bests = pickle.load(f)
 
-            for i, best in enumerate(bests):
-                plt.plot(best, label=f"{algorithm}_{i}")
+def load_results(dim: int) -> pd.DataFrame:
+    """
+    Load results for a given dimension from Parquet.
 
-            plt.yscale("log")
-            plt.title(function)
-            plt.xlabel(r"Iterations $t$")
-            plt.ylabel(r"$f(x_t)$")
-            plt.savefig(convergence_plot, dpi=600)
-            plt.show()
+    Args:
+        dim: Dimension to load.
 
-            min_descent = []
-            max_descent = []
-            mean_descent = []
-            std_plus_descent = []
-            std_minus_descent = []
+    Returns:
+        DataFrame with columns: function, algorithm, run, values
+    """
+    results_path = get_results_path(dim)
+    if not path.exists(results_path):
+        raise FileNotFoundError(f"Results not found: {results_path}")
+    return pd.read_parquet(results_path)
 
-            min_num_it = int(np.max([len(best) for best in bests]))
 
-            for i in range(min_num_it):
-                values = [best[i] if i < len(best) else np.nan for best in bests]
-                mean_value = np.nanmean(values)
-                min_value = np.nanmin(values)
-                max_value = np.nanmax(values)
-                std_value = np.nanstd(values)
+def filter_results(
+    df: pd.DataFrame,
+    functions: Optional[List[str]] = None,
+    algorithms: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """Filter results by functions and algorithms."""
+    result = df
+    if functions:
+        result = result[result["function"].isin(functions)]
+    if algorithms:
+        result = result[result["algorithm"].isin(algorithms)]
+    return result
 
-                min_descent.append(min_value)
-                max_descent.append(max_value)
-                mean_descent.append(mean_value)
-                std_plus_descent.append(mean_value + std_value)
-                std_minus_descent.append(max([min_value, mean_value - std_value]))
 
-            plt.figure()
-            plt.plot(min_descent, label="min")
-            plt.plot(max_descent, label="max")
-            plt.plot(mean_descent, label="mean")
-            plt.fill_between(range(min_num_it),
-                            std_minus_descent,
-                            std_plus_descent,
-                            alpha=0.5)
-            plt.yscale("log")
-            plt.legend()
-            plt.title(function)
-            plt.xlabel(r"Iterations $t$")
-            plt.ylabel(r"$f(x_t)$")
-            plt.savefig(convergence_mean_plot, dpi=600)
-            plt.show()
+def compute_statistics(values_list: List[List[float]]) -> Dict[str, np.ndarray]:
+    """
+    Compute statistics across multiple runs.
 
-        print(f"Saved images for {function}")
+    Args:
+        values_list: List of convergence curves.
+
+    Returns:
+        Dictionary with min, max, mean, std arrays.
+    """
+    min_len = max(len(v) for v in values_list) if values_list else 0
+
+    padded = []
+    for v in values_list:
+        if len(v) < min_len:
+            v = v + [np.nan] * (min_len - len(v))
+        padded.append(v)
+
+    arr = np.array(padded)
+
+    return {
+        "min": np.nanmin(arr, axis=0),
+        "max": np.nanmax(arr, axis=0),
+        "mean": np.nanmean(arr, axis=0),
+        "std": np.nanstd(arr, axis=0),
+    }
+
+
+def plot_convergence_all_runs(
+    df: pd.DataFrame,
+    function: str,
+    algorithm: str,
+    output_path: str,
+    show: bool = False,
+) -> None:
+    """Plot individual convergence curves for all runs."""
+    subset = df[(df["function"] == function) & (df["algorithm"] == algorithm)]
+
+    if subset.empty:
+        print(f"No data for {function} - {algorithm}")
+        return
+
+    plt.figure(figsize=(10, 6))
+    for _, row in subset.iterrows():
+        plt.plot(row["values"], alpha=0.5, label=f"run_{row['run']}")
+
+    plt.yscale("log")
+    plt.title(f"{function} - {algorithm}")
+    plt.xlabel(r"Iterations $t$")
+    plt.ylabel(r"$f(x_t)$")
+    plt.savefig(output_path, dpi=600)
+    if show:
+        plt.show()
+    plt.close()
+    print(f"Saved {output_path}")
+
+
+def plot_convergence_with_stats(
+    df: pd.DataFrame,
+    function: str,
+    algorithm: str,
+    output_path: str,
+    show: bool = False,
+) -> None:
+    """Plot mean convergence curve with min/max bounds and std shading."""
+    subset = df[(df["function"] == function) & (df["algorithm"] == algorithm)]
+
+    if subset.empty:
+        print(f"No data for {function} - {algorithm}")
+        return
+
+    values_list = subset["values"].tolist()
+    stats = compute_statistics(values_list)
+
+    x = np.arange(len(stats["mean"]))
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(x, stats["min"], linestyle="--", alpha=0.7, label="min")
+    plt.plot(x, stats["max"], linestyle="--", alpha=0.7, label="max")
+    plt.plot(x, stats["mean"], linewidth=2, label="mean")
+    plt.fill_between(
+        x,
+        np.maximum(stats["min"], stats["mean"] - stats["std"]),
+        np.minimum(stats["max"], stats["mean"] + stats["std"]),
+        alpha=0.3,
+        label="mean ± std",
+    )
+    plt.yscale("log")
+    plt.legend()
+    plt.title(f"{function} - {algorithm}")
+    plt.xlabel(r"Iterations $t$")
+    plt.ylabel(r"$f(x_t)$")
+    plt.savefig(output_path, dpi=600)
+    if show:
+        plt.show()
+    plt.close()
+    print(f"Saved {output_path}")
+
+
+def plot_all_algorithms(
+    df: pd.DataFrame,
+    function: str,
+    output_dir: str,
+    show: bool = False,
+) -> None:
+    """Plot comparison of all algorithms for a given function."""
+    algorithms = df[df["function"] == function]["algorithm"].unique()
+
+    plt.figure(figsize=(12, 8))
+
+    for algorithm in algorithms:
+        subset = df[(df["function"] == function) & (df["algorithm"] == algorithm)]
+        values_list = subset["values"].tolist()
+        if values_list:
+            stats = compute_statistics(values_list)
+            plt.plot(stats["mean"], label=algorithm, linewidth=2)
+
+    plt.yscale("log")
+    plt.legend()
+    plt.title(f"{function} - All Algorithms")
+    plt.xlabel(r"Iterations $t$")
+    plt.ylabel(r"$f(x_t)$")
+
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"{function}_comparison.png")
+    plt.savefig(output_path, dpi=600)
+    if show:
+        plt.show()
+    plt.close()
+    print(f"Saved {output_path}")
+
+
+def generate_summary_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Generate summary statistics table."""
+    summary = []
+
+    for (func, alg), group in df.groupby(["function", "algorithm"]):
+        values_list = group["values"].tolist()
+        if not values_list:
+            continue
+
+        final_values = [v[-1] if len(v) > 0 else np.nan for v in values_list]
+        best_values = [min(v) if len(v) > 0 else np.nan for v in values_list]
+
+        summary.append(
+            {
+                "function": func,
+                "algorithm": alg,
+                "n_runs": len(values_list),
+                "mean_final": np.mean(final_values),
+                "std_final": np.std(final_values),
+                "min_final": np.min(final_values),
+                "mean_best": np.mean(best_values),
+            }
+        )
+
+    return pd.DataFrame(summary)
+
+
+def main() -> None:
+    """Main function to parse arguments and generate plots."""
+    parser = argparse.ArgumentParser(
+        description="Generate convergence plots from Parquet results."
+    )
+    parser.add_argument(
+        "--dim", type=int, default=DEFAULT_DIM, help=f"Dimension (default: {DEFAULT_DIM})"
+    )
+    parser.add_argument(
+        "--functions",
+        nargs="+",
+        default=None,
+        help="Benchmark functions (default: all functions in data)",
+    )
+    parser.add_argument(
+        "--algorithms",
+        nargs="+",
+        default=DEFAULT_ALGORITHMS,
+        help=f"Algorithms to plot (default: {' '.join(DEFAULT_ALGORITHMS)})",
+    )
+    parser.add_argument(
+        "--show-plots", action="store_true", help="Display plots interactively"
+    )
+    parser.add_argument(
+        "--plot-comparison",
+        action="store_true",
+        help="Plot all algorithms comparison",
+    )
+    parser.add_argument(
+        "--summary", action="store_true", help="Print summary table"
+    )
+
+    args = parser.parse_args()
+
+    try:
+        df = load_results(args.dim)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        print(f"Run profiles.py first to generate results.")
+        return
+
+    # Get all functions from data if not specified
+    all_functions = sorted(df["function"].unique().tolist())
+    if args.functions is None:
+        args.functions = all_functions
+        print(f"No functions specified, using all {len(all_functions)} functions from data")
+    else:
+        # Filter to only existing functions
+        args.functions = [f for f in args.functions if f in all_functions]
+        if not args.functions:
+            print(f"No valid functions found. Available: {all_functions}")
+            return
+
+    df = filter_results(df, args.functions, args.algorithms)
+
+    if df.empty:
+        print("No data found matching criteria.")
+        return
+
+    print(f"Loaded {len(df)} records for dim={args.dim}")
+    print(f"Functions: {args.functions}")
+    print(f"Algorithms: {args.algorithms}")
+
+    base_output_dir = os.path.join("results", "plots", f"dim={args.dim}")
+
+    # Generate plots for each function in its own folder
+    for function in args.functions:
+        func_dir = os.path.join(base_output_dir, function)
+        os.makedirs(func_dir, exist_ok=True)
+
+        func_df = df[df["function"] == function]
+        print(f"\nProcessing: {function} ({len(func_df)} records)")
+
+        # Plot each algorithm
+        for algorithm in args.algorithms:
+            alg_df = func_df[func_df["algorithm"] == algorithm]
+            if alg_df.empty:
+                print(f"  No data for {algorithm}")
+                continue
+
+            conv_path = os.path.join(func_dir, f"{algorithm}_convergence.png")
+            if not path.exists(conv_path):
+                plot_convergence_with_stats(
+                    df, function, algorithm, conv_path, False
+                )
+                print(f"  Saved: {algorithm}_convergence.png")
+
+        # Plot algorithm comparison
+        if args.plot_comparison:
+            comp_path = os.path.join(func_dir, "comparison.png")
+            if not path.exists(comp_path):
+                plot_all_algorithms(df, function, func_dir, False)
+                print(f"  Saved: comparison.png")
+
+    # Generate summary table
+    if args.summary:
+        summary = generate_summary_table(df)
+        summary.to_csv(
+            os.path.join(base_output_dir, "summary.csv"), index=False
+        )
+        print(f"\nSaved summary to {base_output_dir}/summary.csv")
+
+    print(f"\nAll plots saved to: {base_output_dir}/")
+    print("Done!")
+
+
+if __name__ == "__main__":
+    main()
