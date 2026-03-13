@@ -97,6 +97,11 @@ class ASGF(BaseOptimizer):
                     x, ASGF.data["m"], sigma, len(x), lipschitz_coefficients, basis, f, L_nabla, steps[i - 1][1]
                 )
 
+                if not np.isfinite(grad).all() or not np.isfinite(lr):
+                    if debug:
+                        print(f"Warning: non-finite gradient or learning rate at iteration {i}")
+                    break
+
                 x = x - lr * grad
                 steps[i] = [x, f.evaluate(x)]
                 if steps[i][1] < best_value:
@@ -162,6 +167,7 @@ class ASGF(BaseOptimizer):
         p_5, w_5 = np.polynomial.hermite.hermgauss(m)
         p_w_5 = p_5 * w_5
         sigma_p_5 = sigma * p_5
+        norm_factor = 2 / (sigma * np.sqrt(math.pi))
 
         for i in range(dim):
             temp = []
@@ -173,7 +179,7 @@ class ASGF(BaseOptimizer):
                     evaluation = f.evaluate(x + sigma_p_5[k] * basis[i])
                 temp.append(evaluation)
 
-            new_estimate = 2 / (sigma * np.sqrt(math.pi)) * np.sum(p_w_5 * np.array(temp))
+            new_estimate = norm_factor * np.sum(p_w_5 * np.array(temp))
 
             points[i] = p_5
             evaluations[i] = temp
@@ -187,10 +193,11 @@ class ASGF(BaseOptimizer):
         for i in range(len(grad)):
             temp = 0
             for k in range(len(points[i]) - 1):
-                value = np.abs((evaluations[i][k + 1] - evaluations[i][k]) / (sigma * (points[i][k + 1] - points[i][k])))
-
-                if value > temp:
-                    temp = value
+                denom = sigma * (points[i][k + 1] - points[i][k])
+                if abs(denom) > 1e-12:
+                    value = np.abs((evaluations[i][k + 1] - evaluations[i][k]) / denom)
+                    if value > temp:
+                        temp = value
 
             lipschitz_coefficients[i] = temp
 

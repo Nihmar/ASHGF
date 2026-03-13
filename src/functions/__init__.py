@@ -6,6 +6,9 @@ from .benchmarks import *
 
 
 class Function:
+    MAX_VALUE = 1e30
+    CLIP_RANGE = 1e10
+
     def __init__(self, name: str = "sphere"):
         """
         Initialize the Function wrapper.
@@ -106,8 +109,15 @@ class Function:
         Returns:
             Function value at x.
         """
+        x_clipped = np.clip(x, -self.CLIP_RANGE, self.CLIP_RANGE)
+        
         func = self.functions_list[self.name]
-        return func(x)
+        result = func(x_clipped)
+        
+        if not np.isfinite(result):
+            return self.MAX_VALUE
+        
+        return np.clip(result, -self.MAX_VALUE, self.MAX_VALUE)
 
     def __call__(self, x: np.ndarray) -> float:
         """Make the Function object callable."""

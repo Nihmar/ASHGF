@@ -89,6 +89,11 @@ class ASEBO(BaseOptimizer):
 
                 grad, alpha = self.grad_estimator(x, G, i, alpha, f)
 
+                if not np.isfinite(grad).all():
+                    if debug:
+                        print(f"Warning: non-finite gradient at iteration {i}")
+                    break
+
                 if i == 1:
                     G = np.array(grad)
                 else:

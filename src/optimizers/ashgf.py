@@ -116,11 +116,16 @@ class ASHGF(BaseOptimizer):
                     x, ASHGF.data["m"], sigma, len(x), lipschitz_coefficients, basis, f, L_nabla, M, steps[i - 1][1]
                 )
 
-                G.append(grad)
-                if len(G) > self.t:
-                    G = G[1:]
+                if np.isfinite(grad).all() and np.isfinite(lr):
+                    G.append(grad)
+                    if len(G) > self.t:
+                        G = G[1:]
+                    x = x - lr * grad
+                else:
+                    if debug:
+                        print(f"Warning: non-finite gradient or learning rate at iteration {i}")
+                    break
 
-                x = x - lr * grad
                 steps[i] = [x, f.evaluate(x)]
                 if steps[i][1] < best_value:
                     best_value = steps[i][1]
@@ -211,6 +216,7 @@ class ASHGF(BaseOptimizer):
         p_5, w_5 = np.polynomial.hermite.hermgauss(m)
         p_w_5 = p_5 * w_5
         sigma_p_5 = sigma * p_5
+        norm_factor = 2 / (sigma * np.sqrt(math.pi))
 
         buffer = []
         n = m
@@ -235,7 +241,7 @@ class ASHGF(BaseOptimizer):
                     print(x.shape, basis.shape)
                     sys.exit(1)
 
-            new_estimate = 2 / (sigma * np.sqrt(math.pi)) * np.sum(p_w_5 * np.array(temp))
+            new_estimate = norm_factor * np.sum(p_w_5 * np.array(temp))
 
             points[i] = p_5
             evaluations[i] = temp
@@ -249,16 +255,21 @@ class ASHGF(BaseOptimizer):
         for i in range(len(grad)):
             temp = 0
             for couple in buffer:
-                value = np.abs(
-                    (evaluations[i][couple[0]] - evaluations[i][couple[1]]) / (sigma * (points[i][couple[0]] - points[i][couple[1]]))
-                )
-
-                if value > temp:
-                    temp = value
+                denom = sigma * (points[i][couple[0]] - points[i][couple[1]])
+                if abs(denom) > 1e-12:
+                    value = np.abs((evaluations[i][couple[0]] - evaluations[i][couple[1]]) / denom)
+                    if value > temp:
+                        temp = value
 
             lipschitz_coefficients[i] = temp
 
-        L_nabla = (1 - ASHGF.data["gamma_L"]) * np.max(lipschitz_coefficients[:M]) + ASHGF.data["gamma_L"] * L_nabla
+        try:
+            if M > 0 and len(lipschitz_coefficients) > 0:
+                L_nabla = (1 - ASHGF.data["gamma_L"]) * np.max(lipschitz_coefficients[:M]) + ASHGF.data["gamma_L"] * L_nabla
+            else:
+                L_nabla = max(lipschitz_coefficients) if len(lipschitz_coefficients) > 0 else 1.0
+        except Exception:
+            L_nabla = max(lipschitz_coefficients) if len(lipschitz_coefficients) > 0 else 1.0
 
         lr = sigma / L_nabla
 
@@ -348,19 +359,31 @@ class ASHGF(BaseOptimizer):
             Tuple of (matrix of directions, number of directions sampled from gradients).
         """
         G = np.array(G)
-        cov_L_G = np.cov(G.T)
+        
+        G_clean = G[~np.isnan(G).any(axis=1)]
+        if len(G_clean) < 2:
+            cov_L_G = np.eye(dim)
+        else:
+            cov_L_G = np.cov(G_clean.T)
+            cov_L_G = (cov_L_G + cov_L_G.T) / 2
+            eigvals = np.linalg.eigvalsh(cov_L_G)
+            if eigvals.min() < 0:
+                cov_L_G = cov_L_G - eigvals.min() * np.eye(dim)
 
         choices = 0
 
         for i in range(dim):
             choices += int(np.random.choice([0, 1], p=[alpha, 1 - alpha]))
 
-        dirs_L_G = np.random.multivariate_normal(np.zeros(dim), cov_L_G, choices)
-        for i in range(choices):
-            dirs_L_G[i] = dirs_L_G[i] / np.std(dirs_L_G[i])
+        try:
+            dirs_L_G = np.random.multivariate_normal(np.zeros(dim), cov_L_G, choices)
+            for i in range(choices):
+                dirs_L_G[i] = dirs_L_G[i] / np.std(dirs_L_G[i])
+        except:
+            dirs_L_G = np.zeros((0, dim))
 
         dirs_L_G_T = np.random.multivariate_normal(np.zeros(dim), np.identity(dim), dim - choices)
 
         dirs = np.concatenate((dirs_L_G, dirs_L_G_T))
 
-        return dirs / np.linalg.norm(dirs, axis=-1), choices
+        return dirs / np.linalg.norm(dirs, axis=-1)[:, np.newaxis], choices

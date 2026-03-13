@@ -210,19 +210,31 @@ class SGES(BaseOptimizer):
             Tuple of (matrix of directions, number of directions sampled from gradients).
         """
         G = np.array(G)
-        cov_L_G = np.cov(G.T)
+        
+        G_clean = G[~np.isnan(G).any(axis=1)]
+        if len(G_clean) < 2:
+            cov_L_G = np.eye(dim)
+        else:
+            cov_L_G = np.cov(G_clean.T)
+            cov_L_G = (cov_L_G + cov_L_G.T) / 2
+            eigvals = np.linalg.eigvalsh(cov_L_G)
+            if eigvals.min() < 0:
+                cov_L_G = cov_L_G - eigvals.min() * np.eye(dim)
 
         choices = 0
 
         for i in range(dim):
             choices += int(np.random.choice([0, 1], p=[alpha, 1 - alpha]))
 
-        dirs_L_G = np.random.multivariate_normal(np.zeros(dim), cov_L_G, choices)
-        for i in range(choices):
-            dirs_L_G[i] = dirs_L_G[i] / np.std(dirs_L_G[i])
+        try:
+            dirs_L_G = np.random.multivariate_normal(np.zeros(dim), cov_L_G, choices)
+            for i in range(choices):
+                dirs_L_G[i] = dirs_L_G[i] / np.std(dirs_L_G[i])
+        except:
+            dirs_L_G = np.zeros((0, dim))
 
         dirs_L_G_T = np.random.multivariate_normal(np.zeros(dim), np.identity(dim), dim - choices)
 
         dirs = np.concatenate((dirs_L_G, dirs_L_G_T))
 
-        return dirs / np.linalg.norm(dirs, axis=-1), choices
+        return dirs / np.linalg.norm(dirs, axis=-1)[:, np.newaxis], choices

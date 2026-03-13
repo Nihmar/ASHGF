@@ -4,3 +4,5 @@ matplotlib
 scipy
 scikit-learn
 gym
+pyarrow
+tqdm

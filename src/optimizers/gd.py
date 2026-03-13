@@ -113,27 +113,20 @@ class GD(BaseOptimizer):
             The estimated gradient.
         """
         dim = len(x)
-
-        grad = np.zeros(dim, )
+        grad = np.zeros(dim)
         directions = self.compute_directions(dim, dim)
 
-        evaluations = []
-
         for i in range(dim):
-            d = directions[i].reshape(x.shape)
+            d = directions[i]
             dir_plus = x + self.sigma * d
             dir_minus = x - self.sigma * d
 
             evaluations_plus = f.evaluate(dir_plus)
             evaluations_minus = f.evaluate(dir_minus)
 
-            evaluations.append(evaluations_plus)
-            evaluations.append(evaluations_minus)
+            grad += (evaluations_plus - evaluations_minus) * d
 
-            grad = grad + (evaluations_plus - evaluations_minus) * d.reshape(grad.shape)
-
-        grad = grad / (2 * self.sigma * dim)
-
+        grad /= 2 * self.sigma * dim
         return grad
 
     def compute_directions(self, dim_1: int, dim_2: int) -> np.ndarray:

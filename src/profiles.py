@@ -8,6 +8,7 @@ Usage:
 """
 
 import argparse
+import logging
 import os
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -17,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from optimizers.gd import GD
 from optimizers.sges import SGES
@@ -28,6 +30,29 @@ from optimizers.ashgf import ASHGF
 warnings.filterwarnings("default")
 
 RESULTS_DIR = path.join("results", "profiles")
+LOG_DIR = path.join("results", "logs")
+
+
+def setup_logging(log_file: str = "experiments.log") -> logging.Logger:
+    """Setup logging to file."""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    log_path = path.join(LOG_DIR, log_file)
+    
+    logger = logging.getLogger("experiments")
+    logger.setLevel(logging.INFO)
+    
+    if logger.handlers:
+        logger.handlers.clear()
+    
+    file_handler = logging.FileHandler(log_path)
+    file_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    return logger
+
+
 debug_it = 100
 debug = False
 tau = 10 ** (-3)
@@ -116,6 +141,8 @@ def run_single_experiment(
     Returns:
         ExperimentResult with values or error info.
     """
+    np.seterr(divide="ignore", over="ignore", invalid="ignore")
+    
     try:
         algorithm = algorithms[algorithm_name]
         x_0 = np.random.default_rng(seed).standard_normal(dim)
@@ -195,6 +222,8 @@ def run_experiments(
     overwrite: bool = False,
     n_workers: int = 4,
     verbose: bool = True,
+    batch_size: int = 20,
+    logger: Optional[logging.Logger] = None,
 ) -> pd.DataFrame:
     """
     Run experiments for a single dimension using parallel processing.
@@ -206,6 +235,7 @@ def run_experiments(
         overwrite: Whether to overwrite existing results.
         n_workers: Number of parallel workers.
         verbose: Print progress.
+        batch_size: Save results every N experiments.
 
     Returns:
         DataFrame with all results.
@@ -221,6 +251,7 @@ def run_experiments(
     results = load_results(dim)
     completed = 0
     failed = 0
+    pending_results = []
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
         futures = {
@@ -228,40 +259,56 @@ def run_experiments(
             for task in tasks
         }
 
-        for future in as_completed(futures):
-            task = futures[future]
-            function, algorithm_name, _, run, _ = task
+        with tqdm(total=len(tasks), desc=f"dim={dim}", disable=not verbose) as pbar:
+            for future in as_completed(futures):
+                task = futures[future]
+                function, algorithm_name, _, run, _ = task
 
-            try:
-                result = future.result()
+                try:
+                    result = future.result()
 
-                if result.status == "success":
-                    new_row = pd.DataFrame([{
-                        "function": result.function,
-                        "algorithm": result.algorithm,
-                        "run": result.run,
-                        "values": result.values,
-                    }])
-                    results = pd.concat([results, new_row], ignore_index=True)
+                    if result.status == "success":
+                        pending_results.append({
+                            "function": result.function,
+                            "algorithm": result.algorithm,
+                            "run": result.run,
+                            "values": result.values,
+                            "warnings": result.warnings,
+                        })
 
-                    if verbose:
+                        msg = f"[{algorithm_name}] {function} run {run}: OK"
                         if result.warnings:
-                            print(f"[{algorithm_name}] {function} run {run}: OK ({len(result.warnings.split(chr(10)))} warnings)")
-                        else:
-                            print(f"[{algorithm_name}] {function} run {run}: OK")
-                else:
+                            msg += f" ({len(result.warnings.split(chr(10)))} warnings)"
+                            if logger:
+                                logger.warning(f"dim={dim} - {msg}\n  {result.warnings}")
+                        if verbose:
+                            pbar.write(msg)
+                    else:
+                        failed += 1
+                        msg = f"[{algorithm_name}] {function} run {run}: FAILED - {result.error_msg}"
+                        if verbose:
+                            pbar.write(msg)
+                        if logger:
+                            logger.error(f"dim={dim} - {msg}")
+
+                except Exception as e:
                     failed += 1
+                    msg = f"[{algorithm_name}] {function} run {run}: ERROR - {e}"
                     if verbose:
-                        print(f"[{algorithm_name}] {function} run {run}: FAILED - {result.error_msg}")
+                        pbar.write(msg)
+                    if logger:
+                        logger.error(f"dim={dim} - {msg}")
 
-            except Exception as e:
-                failed += 1
-                if verbose:
-                    print(f"[{algorithm_name}] {function} run {run}: ERROR - {e}")
+                completed += 1
+                pbar.update(1)
 
-            completed += 1
-            if completed % 10 == 0:
-                print(f"Progress: {completed}/{len(tasks)} ({failed} failed)")
+                if len(pending_results) >= batch_size:
+                    results = pd.concat([results, pd.DataFrame(pending_results)], ignore_index=True)
+                    save_results(results, dim)
+                    pending_results = []
+
+    if pending_results:
+        results = pd.concat([results, pd.DataFrame(pending_results)], ignore_index=True)
 
     save_results(results, dim)
     print(f"Completed: {completed - failed} success, {failed} failed")
@@ -274,6 +321,7 @@ def run_all_experiments(
     overwrite: bool = False,
     dims_to_run: Optional[List[int]] = None,
     n_workers: int = 4,
+    logger: Optional[logging.Logger] = None,
 ) -> None:
     """Run all experiments across all dimensions."""
     create_folders()
@@ -285,7 +333,7 @@ def run_all_experiments(
         print(f"\n{'='*50}")
         print(f"Running experiments for dim={dim}")
         print(f"{'='*50}\n")
-        run_experiments(dim, n_runs, seed, overwrite, n_workers)
+        run_experiments(dim, n_runs, seed, overwrite, n_workers, logger=logger)
 
 
 def analyze_results(dim: int) -> pd.DataFrame:
@@ -366,6 +414,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    logger = setup_logging(f"dim={args.dims[0] if args.dims else 'all'}.log") if not args.analyze else None
+
     if args.analyze:
         for dim in dims:
             print(f"\n{'='*50}")
@@ -381,6 +431,7 @@ def main() -> None:
             overwrite=args.overwrite,
             dims_to_run=args.dims,
             n_workers=args.workers,
+            logger=logger,
         )
 
 
