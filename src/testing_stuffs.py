@@ -1,5 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import warnings
+
+# Ignore the specific deprecation warning from multiprocessing.forkserver
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="multiprocessing")
 
 from optimizers.gd import GD
 from optimizers.sges import SGES

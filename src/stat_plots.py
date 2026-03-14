@@ -6,8 +6,12 @@ This script loads results from Parquet files and generates convergence plots.
 
 import argparse
 import os
+import warnings
 from os import path
 from typing import Dict, List, Optional
+
+# Ignore the specific deprecation warning from multiprocessing.forkserver
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="multiprocessing")
 
 import numpy as np
 import pandas as pd
@@ -219,7 +223,10 @@ def main() -> None:
         description="Generate convergence plots from Parquet results."
     )
     parser.add_argument(
-        "--dim", type=int, default=DEFAULT_DIM, help=f"Dimension (default: {DEFAULT_DIM})"
+        "--dim",
+        type=int,
+        default=DEFAULT_DIM,
+        help=f"Dimension (default: {DEFAULT_DIM})",
     )
     parser.add_argument(
         "--functions",
@@ -241,9 +248,7 @@ def main() -> None:
         action="store_true",
         help="Plot all algorithms comparison",
     )
-    parser.add_argument(
-        "--summary", action="store_true", help="Print summary table"
-    )
+    parser.add_argument("--summary", action="store_true", help="Print summary table")
 
     args = parser.parse_args()
 
@@ -258,7 +263,9 @@ def main() -> None:
     all_functions = sorted(df["function"].unique().tolist())
     if args.functions is None:
         args.functions = all_functions
-        print(f"No functions specified, using all {len(all_functions)} functions from data")
+        print(
+            f"No functions specified, using all {len(all_functions)} functions from data"
+        )
     else:
         # Filter to only existing functions
         args.functions = [f for f in args.functions if f in all_functions]
@@ -295,9 +302,7 @@ def main() -> None:
 
             conv_path = os.path.join(func_dir, f"{algorithm}_convergence.png")
             if not path.exists(conv_path):
-                plot_convergence_with_stats(
-                    df, function, algorithm, conv_path, False
-                )
+                plot_convergence_with_stats(df, function, algorithm, conv_path, False)
                 print(f"  Saved: {algorithm}_convergence.png")
 
         # Plot algorithm comparison
@@ -310,9 +315,7 @@ def main() -> None:
     # Generate summary table
     if args.summary:
         summary = generate_summary_table(df)
-        summary.to_csv(
-            os.path.join(base_output_dir, "summary.csv"), index=False
-        )
+        summary.to_csv(os.path.join(base_output_dir, "summary.csv"), index=False)
         print(f"\nSaved summary to {base_output_dir}/summary.csv")
 
     print(f"\nAll plots saved to: {base_output_dir}/")

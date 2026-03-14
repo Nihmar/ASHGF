@@ -28,6 +28,8 @@ from optimizers.ashgf import ASHGF
 
 
 warnings.filterwarnings("default")
+# Ignore the specific deprecation warning from multiprocessing.forkserver
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="multiprocessing")
 
 RESULTS_DIR = path.join("results", "profiles")
 LOG_DIR = path.join("results", "logs")
@@ -37,19 +39,19 @@ def setup_logging(log_file: str = "experiments.log") -> logging.Logger:
     """Setup logging to file."""
     os.makedirs(LOG_DIR, exist_ok=True)
     log_path = path.join(LOG_DIR, log_file)
-    
+
     logger = logging.getLogger("experiments")
     logger.setLevel(logging.INFO)
-    
+
     if logger.handlers:
         logger.handlers.clear()
-    
+
     file_handler = logging.FileHandler(log_path)
     file_handler.setLevel(logging.INFO)
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-    
+
     return logger
 
 
@@ -70,6 +72,7 @@ algorithms: Dict[str, type] = {
 @dataclass
 class ExperimentResult:
     """Result of a single experiment run."""
+
     function: str
     algorithm: str
     run: int
@@ -142,7 +145,7 @@ def run_single_experiment(
         ExperimentResult with values or error info.
     """
     np.seterr(divide="ignore", over="ignore", invalid="ignore")
-    
+
     try:
         algorithm = algorithms[algorithm_name]
         x_0 = np.random.default_rng(seed).standard_normal(dim)
@@ -160,8 +163,7 @@ def run_single_experiment(
 
             if w:
                 warning_msgs = [
-                    f"{warning.category.__name__}: {warning.message}"
-                    for warning in w
+                    f"{warning.category.__name__}: {warning.message}" for warning in w
                 ]
 
         return ExperimentResult(
@@ -200,8 +202,7 @@ def get_tasks(
     for name in algorithms.keys():
         for function in fs:
             existing = results[
-                (results["function"] == function)
-                & (results["algorithm"] == name)
+                (results["function"] == function) & (results["algorithm"] == name)
             ]
             existing_runs = set(existing["run"].tolist() if len(existing) > 0 else [])
 
@@ -255,8 +256,7 @@ def run_experiments(
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
         futures = {
-            executor.submit(run_single_experiment, *task): task
-            for task in tasks
+            executor.submit(run_single_experiment, *task): task for task in tasks
         }
 
         with tqdm(total=len(tasks), desc=f"dim={dim}", disable=not verbose) as pbar:
@@ -268,19 +268,23 @@ def run_experiments(
                     result = future.result()
 
                     if result.status == "success":
-                        pending_results.append({
-                            "function": result.function,
-                            "algorithm": result.algorithm,
-                            "run": result.run,
-                            "values": result.values,
-                            "warnings": result.warnings,
-                        })
+                        pending_results.append(
+                            {
+                                "function": result.function,
+                                "algorithm": result.algorithm,
+                                "run": result.run,
+                                "values": result.values,
+                                "warnings": result.warnings,
+                            }
+                        )
 
                         msg = f"[{algorithm_name}] {function} run {run}: OK"
                         if result.warnings:
                             msg += f" ({len(result.warnings.split(chr(10)))} warnings)"
                             if logger:
-                                logger.warning(f"dim={dim} - {msg}\n  {result.warnings}")
+                                logger.warning(
+                                    f"dim={dim} - {msg}\n  {result.warnings}"
+                                )
                         if verbose:
                             pbar.write(msg)
                     else:
@@ -303,7 +307,9 @@ def run_experiments(
                 pbar.update(1)
 
                 if len(pending_results) >= batch_size:
-                    results = pd.concat([results, pd.DataFrame(pending_results)], ignore_index=True)
+                    results = pd.concat(
+                        [results, pd.DataFrame(pending_results)], ignore_index=True
+                    )
                     save_results(results, dim)
                     pending_results = []
 
@@ -330,9 +336,9 @@ def run_all_experiments(
         dims_to_run = dims
 
     for dim in dims_to_run:
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print(f"Running experiments for dim={dim}")
-        print(f"{'='*50}\n")
+        print(f"{'=' * 50}\n")
         run_experiments(dim, n_runs, seed, overwrite, n_workers, logger=logger)
 
 
@@ -414,13 +420,17 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    logger = setup_logging(f"dim={args.dims[0] if args.dims else 'all'}.log") if not args.analyze else None
+    logger = (
+        setup_logging(f"dim={args.dims[0] if args.dims else 'all'}.log")
+        if not args.analyze
+        else None
+    )
 
     if args.analyze:
         for dim in dims:
-            print(f"\n{'='*50}")
+            print(f"\n{'=' * 50}")
             print(f"Summary for dim={dim}")
-            print(f"{'='*50}")
+            print(f"{'=' * 50}")
             summary = analyze_results(dim)
             if not summary.empty:
                 print(summary.to_string(index=False))
