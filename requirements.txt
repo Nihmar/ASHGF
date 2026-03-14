@@ -6,3 +6,5 @@ scikit-learn
 gym
 pyarrow
 tqdm
+numba
+llvmlite
