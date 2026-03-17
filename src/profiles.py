@@ -199,6 +199,7 @@ def get_tasks(
     n_runs: int,
     seed: int,
     overwrite: bool,
+    algorithms_filter: Optional[List[str]] = None,
 ) -> List[Tuple[str, str, int, int, int]]:
     """Generate list of experiments to run."""
     np.random.seed(seed)
@@ -206,8 +207,14 @@ def get_tasks(
     fs = get_functions()
     results = load_results(dim)
 
+    # Filter algorithms if specified
+    alg_names = algorithms.keys() if algorithms_filter is None else algorithms_filter
+
     tasks = []
-    for name in algorithms.keys():
+    for name in alg_names:
+        if name not in algorithms:
+            print(f"Warning: Unknown algorithm '{name}', skipping")
+            continue
         for function in fs:
             existing = results[
                 (results["function"] == function) & (results["algorithm"] == name)
@@ -233,6 +240,7 @@ def run_experiments(
     verbose: bool = True,
     batch_size: int = 20,
     logger: Optional[logging.Logger] = None,
+    algorithms_filter: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """
     Run experiments for a single dimension using parallel processing.
@@ -245,11 +253,12 @@ def run_experiments(
         n_workers: Number of parallel workers.
         verbose: Print progress.
         batch_size: Save results every N experiments.
+        algorithms_filter: List of algorithms to run (None = all).
 
     Returns:
         DataFrame with all results.
     """
-    tasks = get_tasks(dim, n_runs, seed, overwrite)
+    tasks = get_tasks(dim, n_runs, seed, overwrite, algorithms_filter)
 
     if not tasks:
         print(f"All experiments already completed for dim={dim}")
@@ -336,6 +345,7 @@ def run_all_experiments(
     dims_to_run: Optional[List[int]] = None,
     n_workers: int = 4,
     logger: Optional[logging.Logger] = None,
+    algorithms_filter: Optional[List[str]] = None,
 ) -> None:
     """Run all experiments across all dimensions."""
     create_folders()
@@ -346,8 +356,9 @@ def run_all_experiments(
     for dim in dims_to_run:
         print(f"\n{'=' * 50}")
         print(f"Running experiments for dim={dim}")
-        print(f"{'=' * 50}\n")
-        run_experiments(dim, n_runs, seed, overwrite, n_workers, logger=logger)
+        alg_msg = f" ({algorithms_filter})" if algorithms_filter else ""
+        print(f"{'=' * 50}{alg_msg}\n")
+        run_experiments(dim, n_runs, seed, overwrite, n_workers, logger=logger, algorithms_filter=algorithms_filter)
 
 
 def analyze_results(dim: int) -> pd.DataFrame:
@@ -425,6 +436,12 @@ def main() -> None:
         action="store_true",
         help="Reduce output verbosity",
     )
+    parser.add_argument(
+        "--algorithms",
+        nargs="+",
+        default=None,
+        help="Specific algorithms to run (default: all)",
+    )
 
     args = parser.parse_args()
 
@@ -450,6 +467,7 @@ def main() -> None:
             dims_to_run=args.dims,
             n_workers=args.workers,
             logger=logger,
+            algorithms_filter=args.algorithms,
         )
 
 

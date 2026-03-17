@@ -50,13 +50,46 @@ cd src
 python profiles.py --n-runs 10 --workers 4
 ```
 
-Arguments:
-- `--n-runs`: Number of runs per experiment (default: 10)
-- `--workers`: Number of parallel workers (default: 4)
-- `--dims`: Specific dimensions to run (default: 10, 100, 1000)
-- `--seed`: Random seed (default: 0)
-- `--overwrite`: Overwrite existing results
-- `--analyze`: Analyze and print summary
+### Arguments
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--n-runs` | Number of runs per experiment | 10 |
+| `--workers` | Number of parallel workers | 4 |
+| `--dims` | Specific dimensions to run (space-separated) | 10, 100, 1000 |
+| `--seed` | Random seed | 0 |
+| `--overwrite` | Overwrite existing results | false |
+| `--algorithms` | Specific algorithms to run (space-separated) | all |
+| `--analyze` | Analyze and print summary | false |
+| `--quiet` | Reduce output verbosity | false |
+
+### Usage Examples
+
+```bash
+# Run all experiments with default settings
+python profiles.py --n-runs 10 --workers 4
+
+# Run only dimension 10
+python profiles.py --dims 10 --n-runs 10 --workers 4
+
+# Run specific dimensions
+python profiles.py --dims 10 100 --n-runs 10 --workers 4
+
+# Run only one algorithm (recalculate just ASHGF)
+python profiles.py --dims 10 --algorithms ASHGF --n-runs 10
+
+# Run only one algorithm, overwriting existing results
+python profiles.py --dims 10 --algorithms ASHGF --n-runs 10 --overwrite
+
+# Run specific algorithms
+python profiles.py --dims 10 --algorithms GD ASGF --n-runs 10
+
+# Analyze existing results (no running, just print summary)
+python profiles.py --analyze
+
+# Full example: dim=10, 10 runs, overwrite ASHGF results only
+python profiles.py --dims 10 --algorithms ASHGF --n-runs 10 --overwrite --workers 4
+```
 
 Results are saved to `results/profiles/dim=<dim>/results.parquet`.
 
@@ -69,12 +102,38 @@ cd src
 python stat_plots.py --dim 100
 ```
 
-Arguments:
-- `--dim`: Dimension to plot (default: 100)
-- `--functions`: Specific functions to plot (default: all)
-- `--algorithms`: Algorithms to include (default: GD SGES ASGF ASHGF ASEBO)
-- `--plot-comparison`: Generate comparison plots
-- `--summary`: Generate summary CSV table
+### Arguments
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--dim` | Dimension to plot | 100 |
+| `--functions` | Specific functions to plot (space-separated) | all from data |
+| `--algorithms` | Algorithms to include (space-separated) | GD SGES ASGF ASHGF ASEBO |
+| `--plot-comparison` | Generate comparison plots | false |
+| `--summary` | Generate summary CSV table | false |
+| `--show-plots` | Display plots interactively | false |
+
+### Usage Examples
+
+```bash
+# Generate all plots for dimension 10
+python stat_plots.py --dim 10
+
+# Generate comparison plots (all algorithms on same chart)
+python stat_plots.py --dim 10 --plot-comparison
+
+# Generate comparison plots + summary CSV
+python stat_plots.py --dim 10 --plot-comparison --summary
+
+# Specific functions only
+python stat_plots.py --dim 10 --functions sphere rastrigin levy --plot-comparison
+
+# Specific algorithms only
+python stat_plots.py --dim 10 --algorithms GD ASGF ASHGF --plot-comparison
+
+# Full example: dim=10, specific functions, comparison + summary
+python stat_plots.py --dim 10 --functions sphere rastrigin ackley levy --plot-comparison --summary
+```
 
 Plots are saved to `results/plots/dim=<dim>/<function>/`.
 

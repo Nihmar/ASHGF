@@ -14,13 +14,6 @@ class ASGF(BaseOptimizer):
 
     Uses Directional Gaussian Smoothing with Gauss-Hermite quadrature to
     estimate the gradient, plus adaptive learning rate and smoothing parameter.
-
-    BUGFIX vs original code:
-      Lipschitz constant estimation used only consecutive quadrature node
-      pairs (k, k+1), but the thesis (eq. 3.1) specifies all pairs (i,k)
-      in set I where |i - ⌊m/2⌋ - 1| ≠ |k - ⌊m/2⌋ - 1|.  Using only
-      adjacent pairs underestimates the Lipschitz constant, causing the
-      adaptive learning rate to be too large.
     """
 
     kind = "Adaptive Stochastic Gradient-Free"
@@ -74,12 +67,16 @@ class ASGF(BaseOptimizer):
         lipschitz_coefficients = np.ones(dim)
         basis = special_ortho_group.rvs(dim)
 
-        # Precompute the Gauss-Hermite nodes, weights, and the valid pair
-        # index set I (eq. 3.1) — these are constant across iterations.
+        # Precompute Gauss-Hermite quadrature for standard normal:
+        #   nodes_std = √2 * v_m, weights_std = w_m / √π
+        #   so that ∑ weights_std * f(nodes_std) ≈ 𝔼_{z∼N(0,1)}[f(z)].
         m = ASGF.data["m"]
-        p_nodes, w_nodes = np.polynomial.hermite.hermgauss(m)
-        p_w = p_nodes * w_nodes
+        v_m, w_m = np.polynomial.hermite.hermgauss(m)
+        nodes_std = v_m * np.sqrt(2)
+        weights_std = w_m / np.sqrt(np.pi)
         mid = m // 2
+
+        # Set of index pairs I for Lipschitz estimation (eq. 3.1)
         pair_indices = [
             (a, b)
             for a in range(m)
@@ -97,7 +94,7 @@ class ASGF(BaseOptimizer):
 
                 grad, lipschitz_coefficients, lr, derivatives, L_nabla = self._grad_estimator(
                     x, m, sigma, dim, lipschitz_coefficients, basis, f,
-                    L_nabla, current_val, p_nodes, p_w, pair_indices
+                    L_nabla, current_val, nodes_std, weights_std, pair_indices
                 )
 
                 if not np.isfinite(grad).all() or not np.isfinite(lr):
@@ -135,7 +132,7 @@ class ASGF(BaseOptimizer):
 
     def _grad_estimator(
         self, x, m, sigma, dim, lipschitz_coefficients, basis, f,
-        L_nabla, value, p_nodes, p_w, pair_indices
+        L_nabla, value, nodes_std, weights_std, pair_indices
     ):
         """
         DGS gradient estimator with Gauss-Hermite quadrature (eq. 2.22).
@@ -144,11 +141,11 @@ class ASGF(BaseOptimizer):
         that direction and assembles the directional derivative estimate.
         Also estimates local Lipschitz constants per direction (eq. 3.1).
         """
-        norm_factor = 2.0 / (sigma * math.sqrt(math.pi))
-        sigma_p = sigma * p_nodes  # precomputed perturbation magnitudes
+        # Perturbation magnitudes: σ * nodes_std
+        pert = sigma * nodes_std
 
         # Evaluate all quadrature points for all directions
-        # evaluations[j][k] = F(x + sigma * p_nodes[k] * basis[j])
+        # evaluations[j, k] = F(x + pert[k] * basis[j])
         evaluations = np.empty((dim, m))
         derivatives = np.empty(dim)
 
@@ -157,25 +154,27 @@ class ASGF(BaseOptimizer):
                 if k == m // 2:
                     evaluations[j, k] = value
                 else:
-                    evaluations[j, k] = f.evaluate(x + sigma_p[k] * basis[j])
+                    evaluations[j, k] = f.evaluate(x + pert[k] * basis[j])
 
-            derivatives[j] = norm_factor * np.dot(p_w, evaluations[j])
+            # DGS estimator: (1/σ) Σ weights_std * nodes_std * F
+            derivatives[j] = (1.0 / sigma) * np.dot(weights_std * nodes_std, evaluations[j])
 
         # Assemble gradient: g = Σⱼ derivatives[j] * basis[j]
         grad = derivatives @ basis  # (dim,) @ (dim, dim) -> (dim,)
 
-        # Estimate local Lipschitz constants (eq. 3.1)
-        # FIX: use all pairs in set I, not just adjacent pairs
+        # Estimate local Lipschitz constants (eq. 3.1) using all pairs in set I
         for j in range(dim):
             lip = 0.0
             for a, b in pair_indices:
-                denom = sigma * (p_nodes[a] - p_nodes[b])
+                denom = sigma * (nodes_std[a] - nodes_std[b])
                 if abs(denom) > 1e-12:
                     val = abs((evaluations[j, a] - evaluations[j, b]) / denom)
                     if val > lip:
                         lip = val
             lipschitz_coefficients[j] = lip
 
+        # Update average Lipschitz constant and compute learning rate (eq. 3.2)
+        # In ASGF they use the Lipschitz constant of the first direction (the gradient)
         L_nabla = (1 - ASGF.data["gamma_L"]) * lipschitz_coefficients[0] + ASGF.data["gamma_L"] * L_nabla
         lr = sigma / max(L_nabla, 1e-12)
 
@@ -189,6 +188,7 @@ class ASGF(BaseOptimizer):
         """
         dim = len(grad)
 
+        # Reset if sigma became too small and resets left
         if r > 0 and sigma < ASGF.data["ro"] * ASGF.data["sigma_zero"]:
             basis = special_ortho_group.rvs(dim)
             sigma = ASGF.data["sigma_zero"]
@@ -206,6 +206,7 @@ class ASGF(BaseOptimizer):
         Q, _ = la.qr(basis.T)
         basis = Q.T
 
+        # Adapt sigma based on max(|derivative| / Lipschitz)
         lipschitz_coefficients = np.maximum(lipschitz_coefficients, 1e-10)
         ratio = np.max(np.abs(derivatives / lipschitz_coefficients))
 

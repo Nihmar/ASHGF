@@ -1,10 +1,7 @@
 import numpy as np
 import numpy.linalg as la
 from sklearn.decomposition import PCA
-from scipy.linalg import cholesky
-from numpy.linalg import LinAlgError
-from numpy.random import standard_normal
-
+from scipy.stats import chi2
 from functions import Function
 from optimizers.base import BaseOptimizer
 
@@ -13,14 +10,11 @@ class ASEBO(BaseOptimizer):
     """
     Adaptive ES-Active Subspaces (Algorithm 3 in the thesis).
 
-    Uses PCA on gradient history to discover an active subspace, then
-    samples directions from a mixture of the subspace and the full space.
-
-    BUGFIX vs original code:
-      The gradient was divided by (2σ) but NOT by n_samples.  The thesis
-      (Algorithm 3, line 11) specifies: ∇ = 1/(2n_t σ) Σ (F⁺-F⁻) gⱼ.
-      Missing the 1/n_t factor makes the gradient estimate scale with the
-      number of samples, which breaks the learning rate tuning.
+    The algorithm uses PCA on the history of estimated gradients to discover
+    an active subspace that captures most of the variance. Directions for
+    gradient estimation are then sampled from a mixture of the active subspace
+    and its orthogonal complement. The mixture probability p is adapted
+    online using the estimated gradient components.
     """
 
     kind = "Adaptive ES-Active Subspaces"
@@ -29,9 +23,8 @@ class ASEBO(BaseOptimizer):
         self,
         lr: float = 1e-4,
         sigma: float = 1e-4,
-        k: int = 50,
-        lambd: float = 0.1,
-        thresh: float = 1e-4,
+        k: int = 50,  # buffer size / warm‑up iterations
+        thresh: float = 0.995,  # variance threshold for PCA
         seed: int = 2003,
         eps: float = 1e-8,
     ):
@@ -44,8 +37,51 @@ class ASEBO(BaseOptimizer):
         self.lr = lr
         self.sigma = sigma
         self.k = k
-        self.lambd = lambd
         self.thresh = thresh
+
+    def _sample_directions(self, n: int, dim: int, U_act=None, p: float = 0.5):
+        """
+        Sample `n` perturbation vectors g ∈ ℝᵈ.
+
+        If U_act is None, sampling is isotropic: each g is a standard Gaussian
+        renormalised to have χ(d) norm.
+        If U_act is given (d×r matrix with orthonormal columns), sampling is
+        a mixture:
+          - with probability p: g lies in the active subspace (span of U_act)
+          - with probability 1‑p: g lies in the orthogonal complement
+        In both cases the direction is first made unit length and then scaled
+        by an independent χ(d) random variable, so that ‖g‖₂ follows the
+        correct distribution.
+        """
+        directions = np.zeros((n, dim))
+        for i in range(n):
+            # ----- raw Gaussian vector -----
+            v = np.random.randn(dim)
+
+            if U_act is None:
+                # isotropic : keep as is
+                raw = v
+            else:
+                # mixture
+                proj = U_act @ (U_act.T @ v)  # projection onto active
+                if np.random.rand() < p:
+                    raw = proj  # active part
+                else:
+                    raw = v - proj  # orthogonal part
+
+            # ----- normalise to unit direction -----
+            norm_raw = la.norm(raw)
+            if norm_raw < 1e-12:
+                # fallback (extremely unlikely)
+                raw = np.random.randn(dim)
+                norm_raw = la.norm(raw)
+            unit = raw / norm_raw
+
+            # ----- scale to have χ(d) norm -----
+            chi = np.sqrt(chi2.rvs(df=dim))
+            directions[i] = chi * unit
+
+        return directions
 
     def optimize(
         self,
@@ -66,30 +102,90 @@ class ASEBO(BaseOptimizer):
         best_values = [[x.copy(), best_value]]
         all_values = [current_val]
 
-        alpha = 1.0
-        G = []
+        # Buffer of past gradients (FIFO, max size = self.k)
+        grad_buffer = []
+
+        # Probability of sampling from the active subspace (initial guess)
+        p = 0.5
 
         if debug:
-            print(f"algorithm: asebo  function: {function}  dimension: {dim}  initial value: {current_val}")
+            print(
+                f"algorithm: asebo  function: {function}  dimension: {dim}  initial value: {current_val}"
+            )
 
         for i in range(1, it + 1):
             try:
                 if debug and i % itprint == 0:
-                    print(f"{i}th iteration - value: {current_val}  last best value: {best_value}")
+                    print(
+                        f"{i}th iteration - value: {current_val}  last best value: {best_value}"
+                    )
 
-                grad, alpha = self._grad_estimator(x, G, i, alpha, f, dim)
-
-                if not np.isfinite(grad).all():
-                    if debug:
-                        print(f"Warning: non-finite gradient at iteration {i}")
-                    break
-
-                if i == 1:
-                    G = grad.reshape(1, -1)
+                # ----- gradient estimation -----
+                if i <= self.k:
+                    # Warm‑up: isotropic sampling, use d directions
+                    n_samples = dim
+                    U_act = None
                 else:
-                    G *= 0.99  # decay
-                    G = np.vstack([G, grad.reshape(1, -1)])
+                    # Build active subspace from the gradient buffer
+                    if len(grad_buffer) >= 2:
+                        G = np.array(grad_buffer)
+                        pca = PCA()
+                        pca.fit(G)
+                        cum_var = np.cumsum(pca.explained_variance_ratio_)
+                        # smallest r such that cumulative variance >= thresh
+                        r = np.searchsorted(cum_var, self.thresh) + 1
+                        # U_act : columns are the principal components
+                        U_act = pca.components_[:r].T  # shape (dim, r)
+                        n_samples = r
+                    else:
+                        # Not enough gradients yet – fall back to isotropic
+                        n_samples = dim
+                        U_act = None
 
+                # Sample the directions
+                directions = self._sample_directions(n_samples, dim, U_act, p)
+
+                # Evaluate the black‑box function at perturbed points
+                points_plus = x + self.sigma * directions
+                points_minus = x - self.sigma * directions
+
+                evals_plus = np.array(
+                    [f.evaluate(points_plus[j]) for j in range(n_samples)]
+                )
+                evals_minus = np.array(
+                    [f.evaluate(points_minus[j]) for j in range(n_samples)]
+                )
+
+                diffs = evals_plus - evals_minus  # (n_samples,)
+
+                # Gradient estimate: correct scaling (including 1/n_samples)
+                grad = diffs @ directions / (2 * self.sigma * n_samples)
+
+                # ----- update gradient buffer (FIFO) -----
+                grad_buffer.append(grad.copy())
+                if len(grad_buffer) > self.k:
+                    grad_buffer.pop(0)
+
+                # ----- update probability p (using the current gradient estimate) -----
+                if U_act is not None:
+                    # Project gradient onto active and orthogonal subspaces
+                    grad_act = U_act @ (U_act.T @ grad)
+                    grad_perp = grad - grad_act
+                    s_act = np.dot(grad_act, grad_act)
+                    s_perp = np.dot(grad_perp, grad_perp)
+                    d_act = r
+                    d_perp = dim - r
+
+                    # Optimal p from Theorem 3.2 (ignoring bias terms)
+                    sqrt_act = np.sqrt(s_act * (d_act + 2)) if s_act > 0 else 0.0
+                    sqrt_perp = np.sqrt(s_perp * (d_perp + 2)) if s_perp > 0 else 0.0
+                    if sqrt_act + sqrt_perp > 0:
+                        p_new = sqrt_act / (sqrt_act + sqrt_perp)
+                    else:
+                        p_new = 0.5
+                    p = np.clip(p_new, 0.01, 0.99)  # avoid extremes
+
+                # ----- parameter update -----
                 x_new = x - self.lr * grad
                 new_val = f.evaluate(x_new)
                 all_values.append(new_val)
@@ -110,82 +206,8 @@ class ASEBO(BaseOptimizer):
                 break
 
         if debug:
-            print(f"\nlast evaluation: {all_values[-1]}  last_iterate: {len(all_values)-1}  best evaluation: {best_value}\n")
+            print(
+                f"\nlast evaluation: {all_values[-1]}  last_iterate: {len(all_values)-1}  best evaluation: {best_value}\n"
+            )
 
         return best_values, all_values
-
-    def _grad_estimator(self, x: np.ndarray, G, i: int, alpha: float,
-                         f: Function, dim: int):
-        """
-        ASEBO gradient estimator.
-
-        For i < k: uses n_samples=100 random directions from N(0, I).
-        For i >= k: uses PCA on gradient history to build a covariance
-        matrix that biases sampling toward the active subspace.
-
-        FIX: gradient is now divided by (2 * sigma * n_samples) instead of
-        just (2 * sigma).
-        """
-        n_samples = 100
-        UUT = np.zeros((dim, dim))
-        UUT_ort = np.zeros((dim, dim))
-
-        if i >= self.k and isinstance(G, np.ndarray) and len(G) >= 2:
-            G_clean = G[~np.isnan(G).any(axis=1)]
-            if len(G_clean) >= 2:
-                pca = PCA()
-                pca.fit(G_clean)
-                var_exp = np.cumsum(pca.explained_variance_ratio_)
-                n_samples = max(10, np.argmax(var_exp > self.thresh) + 1)
-
-                U = pca.components_[:n_samples]
-                UUT = U.T @ U
-                U_ort = pca.components_[n_samples:]
-                UUT_ort = U_ort.T @ U_ort
-
-                if i == self.k:
-                    n_samples = 100
-            else:
-                alpha = 1.0
-        else:
-            alpha = 1.0
-
-        # Build covariance and sample directions
-        cov = (alpha / dim) * np.eye(dim) + ((1 - alpha) / max(n_samples, 1)) * UUT
-        cov *= self.sigma
-
-        A = np.zeros((n_samples, dim))
-        try:
-            L = cholesky(cov, check_finite=False, overwrite_a=True)
-            z = standard_normal((n_samples, dim))
-            A = z @ L.T  # equivalent to L @ z_i for each row
-        except LinAlgError:
-            A = np.random.randn(n_samples, dim)
-
-        # Normalize to unit row norms
-        norms = la.norm(A, axis=1, keepdims=True)
-        norms = np.maximum(norms, 1e-12)
-        A /= norms
-
-        # Evaluate all directions (vectorized outer loop)
-        points_plus = x + self.sigma * A   # (n_samples, dim)
-        points_minus = x - self.sigma * A  # (n_samples, dim)
-
-        evals_plus = np.array([f.evaluate(points_plus[j]) for j in range(n_samples)])
-        evals_minus = np.array([f.evaluate(points_minus[j]) for j in range(n_samples)])
-
-        diffs = evals_plus - evals_minus  # (n_samples,)
-
-        # FIX: divide by n_samples as well (thesis eq: 1/(2 n_t σ))
-        grad = diffs @ A / (2 * self.sigma * n_samples)
-
-        # Update alpha based on gradient projections
-        if i >= self.k and UUT.any() and UUT_ort.any():
-            norm_ort = la.norm(grad @ UUT_ort)
-            norm_act = la.norm(grad @ UUT)
-            if norm_act > 1e-12:
-                alpha = norm_ort / norm_act
-            else:
-                alpha = 1.0
-
-        return grad, alpha

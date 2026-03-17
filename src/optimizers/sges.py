@@ -178,48 +178,39 @@ class SGES(BaseOptimizer):
 
         return grad, evaluations, M
 
-    def _compute_directions_sges(self, dim: int, G: list, alpha: float):
+    def _compute_directions_sges(self, dim, G, alpha):
         """
-        Compute directions: M from gradient covariance, (dim-M) from N(0,I).
-        Normalized to unit norm.
+        Compute directions: M directions from the gradient subspace (exploitation),
+        (dim-M) from N(0,I) (exploration). Subspace directions are sampled as
+        U @ z with z ~ N(0,I), where U is an orthonormal basis of the subspace.
         """
         G_arr = np.array(G)
-
         G_clean = G_arr[~np.isnan(G_arr).any(axis=1)]
-        if len(G_clean) < 2:
-            cov_G = np.eye(dim)
-        else:
-            cov_G = np.cov(G_clean.T)
-            cov_G = (cov_G + cov_G.T) / 2
-            eigvals = la.eigvalsh(cov_G)
-            if eigvals.min() < 0:
-                cov_G -= eigvals.min() * np.eye(dim)
 
-        # Number of directions from gradient subspace
-        # Each direction is independently chosen with probability (1-alpha) from G
-        M = np.random.binomial(dim, 1 - alpha)
-        M = max(0, min(M, dim))  # clamp
+        M = np.random.binomial(dim, alpha)
+        M = max(0, min(M, dim))
 
-        try:
-            if M > 0:
-                dirs_G = np.random.multivariate_normal(np.zeros(dim), cov_G, M)
-                # Normalize each row by its std
-                stds = np.std(dirs_G, axis=1, keepdims=True)
-                stds = np.maximum(stds, 1e-12)
-                dirs_G /= stds
+        dirs_G = np.zeros((0, dim))   # default vuoto
+        if M > 0 and len(G_clean) >= 2:
+            # Costruisci la base del sottospazio via SVD
+            U, s, _ = np.linalg.svd(G_clean.T, full_matrices=False)  # U: (dim, k)
+            rank = np.sum(s > 1e-10)                                  # soglia per stabilità
+            if rank > 0:
+                U_sub = U[:, :rank]                                   # base ortonormale
+                # Campiona M vettori nel sottospazio
+                z = np.random.randn(rank, M)
+                dirs_G = (U_sub @ z).T
             else:
-                dirs_G = np.zeros((0, dim))
-        except Exception:
-            dirs_G = np.zeros((0, dim))
-            M = 0
+                # Se il rango è zero (improbabile), usa N(0,I) come ripiego
+                dirs_G = np.random.randn(M, dim)
+        elif M > 0:
+            # Non ci sono abbastanza gradienti validi → usa N(0,I)
+            dirs_G = np.random.randn(M, dim)
 
-        dirs_rand = np.random.multivariate_normal(np.zeros(dim), np.eye(dim), dim - M)
+        # Direzioni esplorative (complemento ortogonale)
+        dirs_rand = np.random.randn(dim - M, dim) if dim - M > 0 else np.zeros((0, dim))
 
         dirs = np.concatenate((dirs_G, dirs_rand), axis=0)
 
-        # Normalize to unit row norms
-        norms = la.norm(dirs, axis=1, keepdims=True)
-        norms = np.maximum(norms, 1e-12)
-        dirs /= norms
-
+        # Nota: NON normalizzare! Le direzioni devono mantenere la loro distribuzione.
         return dirs, M
