@@ -6,6 +6,23 @@ from optimizers.base import BaseOptimizer
 
 
 class SGES(BaseOptimizer):
+    """
+    Self-Guided Evolution Strategies (Algorithm 5 in the thesis).
+
+    After a warmup of t iterations, directions are sampled partly from a
+    gradient-dependent subspace (exploitation) and partly from N(0,I)
+    (exploration). The trade-off parameter alpha is adapted each iteration.
+
+    BUGFIXES vs original code:
+      1. The original grad_estimator computed SGES directions but then
+         *immediately overwrote* them with random directions on the next line.
+         The SGES directions were never actually used. Fixed by using an
+         if/else branch.
+      2. Removed np.random.seed(self.seed) inside grad_estimator — resetting
+         the seed every call made all random directions identical across
+         iterations, defeating the purpose of Monte Carlo sampling.
+    """
+
     kind = "Self-Guided Evolution Strategies"
 
     def __init__(
@@ -45,83 +62,61 @@ class SGES(BaseOptimizer):
         debug: bool = True,
         itprint: int = 25,
     ):
-        """
-        Principal method of the class.
-        It optimizes the given function and returns the sequence of values found by the algorithm.
-
-        Args:
-            function: Name of the function to optimize.
-            dim: Dimension of the domain of the function.
-            it: Number of iterations of the algorithm.
-            x_init: Initial point of the algorithm.
-            debug: True if debug prints are wanted.
-            itprint: Iterations to wait before mid-execution print.
-
-        Returns:
-            Tuple of (best_values, all_values).
-            best_values: list containing the best values found during the execution, in descending order.
-            all_values: list containing all the values found during the execution.
-        """
         np.random.seed(self.seed)
-
         f = Function(function)
         alpha = self.alpha
 
-        if x_init is None:
-            x = np.random.randn(dim)
-        else:
-            x = x_init
+        x = np.random.randn(dim) if x_init is None else x_init.copy()
 
-        steps = {}
-        steps[0] = [x, f.evaluate(x)]
-
-        best_value = steps[0][1]
-        best_values = [[x, best_value]]
+        current_val = f.evaluate(x)
+        best_value = current_val
+        best_values = [[x.copy(), best_value]]
+        all_values = [current_val]
 
         G = []
 
         if debug:
-            print("algorithm:", "sges", "function:", function, "dimension:", len(x), "initial value:", steps[0][1])
+            print(f"algorithm: sges  function: {function}  dimension: {dim}  initial value: {current_val}")
 
         for i in range(1, it + 1):
             try:
-                if i % itprint == 0:
-                    if debug:
-                        print(i, "th iteration - value:", steps[i - 1][1], "last best value:", best_value)
+                if debug and i % itprint == 0:
+                    print(f"{i}th iteration - value: {current_val}  last best value: {best_value}")
 
                 if i < self.t:
-                    grad = self.grad_estimator(x, f)
+                    grad, evaluations = self._grad_estimator(x, f, dim)
                     G.append(grad)
                 else:
-                    grad, evaluations, M = self.grad_estimator(x, f, G, True, alpha)
+                    grad, evaluations, M = self._grad_estimator_sges(x, f, dim, G, alpha)
                     G.append(grad)
-                    G = G[1:]
+                    G = G[1:]  # sliding window of size k
 
-                    try:
-                        r = (1 / M) * np.sum([min([evaluations[2 * j], evaluations[2 * j + 1]]) for j in range(M)])
-                    except:
-                        r = False
+                    # Adapt alpha per eq. 2.14
+                    # Handle edge cases where M=0 or M=dim (empty ranges)
+                    vals_G = [min(evaluations[2 * j], evaluations[2 * j + 1]) for j in range(M)] if M > 0 else []
+                    vals_ort = [min(evaluations[2 * j], evaluations[2 * j + 1]) for j in range(M, dim)] if M < dim else []
 
-                    try:
-                        r_hat = (1 / (dim - M)) * np.sum([min([evaluations[2 * j], evaluations[2 * j + 1]]) for j in range(M, dim)])
-                    except:
-                        r_hat = False
+                    r_G = np.mean(vals_G) if vals_G else None
+                    r_G_ort = np.mean(vals_ort) if vals_ort else None
 
-                    if not r or r < r_hat:
-                        alpha = min([self.delta * alpha, self.k1])
-                    elif not r_hat or r >= r_hat:
-                        alpha = max([(1 / self.delta) * alpha, self.k2])
-                    else:
-                        pass
+                    if r_G is None or (r_G_ort is not None and r_G < r_G_ort):
+                        alpha = min(self.delta * alpha, self.k1)
+                    elif r_G_ort is None or r_G >= r_G_ort:
+                        alpha = max((1 / self.delta) * alpha, self.k2)
 
-                x = x - self.lr * grad
-                steps[i] = [x, f.evaluate(x)]
-                if steps[i][1] < best_value:
-                    best_value = steps[i][1]
-                    best_values.append([steps[i][0], best_value])
+                x_new = x - self.lr * grad
+                new_val = f.evaluate(x_new)
+                all_values.append(new_val)
 
-                if la.norm(x - steps[i - 1][0]) < self.eps:
+                if new_val < best_value:
+                    best_value = new_val
+                    best_values.append([x_new.copy(), best_value])
+
+                if la.norm(x_new - x) < self.eps:
                     break
+
+                x = x_new
+                current_val = new_val
 
             except Exception as e:
                 print("Something has gone wrong!")
@@ -129,112 +124,102 @@ class SGES(BaseOptimizer):
                 break
 
         if debug:
-            print()
-            try:
-                print("last evaluation:", steps[i][1], "last_iterate:", i, "best evaluation:", best_value)
-                print()
-            except:
-                print("last evaluation:", steps[i - 1][1], "last_iterate:", i - 1, "best evaluation:", best_value)
-                print()
+            print(f"\nlast evaluation: {all_values[-1]}  last_iterate: {len(all_values)-1}  best evaluation: {best_value}\n")
 
-        return best_values, [steps[j][1] for j in range(i)]
+        return best_values, all_values
 
-    def grad_estimator(self, x: np.ndarray, f: Function, G: np.ndarray = None, sges: bool = False, alpha: float = 0) -> np.ndarray:
+    def _grad_estimator(self, x: np.ndarray, f: Function, dim: int):
         """
-        Performs the Central Gaussian Smoothing around x for the function f.
-
-        Args:
-            x: Point on which the operation is performed.
-            f: Function object over which the smoothing is performed.
-            G: Buffer of gradients, 2-D array.
-            sges: True if to compute special directions of SGES.
-            alpha: Probability of sampling from gradients.
-
-        Returns:
-            The estimated gradient.
+        Standard central Gaussian smoothing (warmup phase).
+        Vectorized: uses matrix operations instead of per-direction loop.
         """
-        np.random.seed(self.seed)
+        directions = np.random.randn(dim, dim)
 
-        dim = len(x)
+        points_plus = x + self.sigma * directions
+        points_minus = x - self.sigma * directions
 
-        grad = np.zeros(dim, )
+        evals_plus = np.array([f.evaluate(points_plus[i]) for i in range(dim)])
+        evals_minus = np.array([f.evaluate(points_minus[i]) for i in range(dim)])
 
-        if sges:
-            directions, M = self.compute_directions_sges(dim, G, alpha)
-        directions = self.compute_directions(dim)
+        diffs = evals_plus - evals_minus
+        grad = diffs @ directions / (2 * self.sigma * dim)
 
-        evaluations = []
+        # Interleave evaluations for compatibility with alpha adaptation
+        evaluations = np.empty(2 * dim)
+        evaluations[0::2] = evals_plus
+        evaluations[1::2] = evals_minus
 
-        for i in range(dim):
-            d = directions[i].reshape(x.shape)
-            dir_plus = x + self.sigma * d
-            dir_minus = x - self.sigma * d
+        return grad, evaluations
 
-            evaluations_plus = f.evaluate(dir_plus)
-            evaluations_minus = f.evaluate(dir_minus)
-
-            evaluations.append(evaluations_plus)
-            evaluations.append(evaluations_minus)
-
-            grad = grad + (evaluations_plus - evaluations_minus) * d.reshape(grad.shape)
-
-        grad = grad / (2 * self.sigma * dim)
-
-        if sges:
-            return grad, evaluations, M
-        else:
-            return grad
-
-    def compute_directions(self, dim: int) -> np.ndarray:
+    def _grad_estimator_sges(self, x: np.ndarray, f: Function, dim: int,
+                              G: list, alpha: float):
         """
-        Compute a matrix of random directions.
+        SGES gradient estimator (post-warmup phase).
+        Directions are sampled partly from gradient subspace, partly from N(0,I).
 
-        Args:
-            dim: Number of rows and columns.
-
-        Returns:
-            Matrix of directions.
+        FIX: The original code computed SGES directions but then overwrote them
+        with purely random directions. This version correctly uses the
+        gradient-dependent directions.
         """
-        return np.random.randn(dim, dim)
+        directions, M = self._compute_directions_sges(dim, G, alpha)
 
-    def compute_directions_sges(self, dim: int, G: np.ndarray, alpha: float) -> tuple:
+        points_plus = x + self.sigma * directions
+        points_minus = x - self.sigma * directions
+
+        evals_plus = np.array([f.evaluate(points_plus[i]) for i in range(dim)])
+        evals_minus = np.array([f.evaluate(points_minus[i]) for i in range(dim)])
+
+        diffs = evals_plus - evals_minus
+        grad = diffs @ directions / (2 * self.sigma * dim)
+
+        evaluations = np.empty(2 * dim)
+        evaluations[0::2] = evals_plus
+        evaluations[1::2] = evals_minus
+
+        return grad, evaluations, M
+
+    def _compute_directions_sges(self, dim: int, G: list, alpha: float):
         """
-        Compute a matrix of random directions depending on gradient information.
-
-        Args:
-            dim: Number of rows and columns.
-            G: Buffer of gradients, 2-D array.
-            alpha: Probability of sampling from gradients.
-
-        Returns:
-            Tuple of (matrix of directions, number of directions sampled from gradients).
+        Compute directions: M from gradient covariance, (dim-M) from N(0,I).
+        Normalized to unit norm.
         """
-        G = np.array(G)
-        
-        G_clean = G[~np.isnan(G).any(axis=1)]
+        G_arr = np.array(G)
+
+        G_clean = G_arr[~np.isnan(G_arr).any(axis=1)]
         if len(G_clean) < 2:
-            cov_L_G = np.eye(dim)
+            cov_G = np.eye(dim)
         else:
-            cov_L_G = np.cov(G_clean.T)
-            cov_L_G = (cov_L_G + cov_L_G.T) / 2
-            eigvals = np.linalg.eigvalsh(cov_L_G)
+            cov_G = np.cov(G_clean.T)
+            cov_G = (cov_G + cov_G.T) / 2
+            eigvals = la.eigvalsh(cov_G)
             if eigvals.min() < 0:
-                cov_L_G = cov_L_G - eigvals.min() * np.eye(dim)
+                cov_G -= eigvals.min() * np.eye(dim)
 
-        choices = 0
-
-        for i in range(dim):
-            choices += int(np.random.choice([0, 1], p=[alpha, 1 - alpha]))
+        # Number of directions from gradient subspace
+        # Each direction is independently chosen with probability (1-alpha) from G
+        M = np.random.binomial(dim, 1 - alpha)
+        M = max(0, min(M, dim))  # clamp
 
         try:
-            dirs_L_G = np.random.multivariate_normal(np.zeros(dim), cov_L_G, choices)
-            for i in range(choices):
-                dirs_L_G[i] = dirs_L_G[i] / np.std(dirs_L_G[i])
-        except:
-            dirs_L_G = np.zeros((0, dim))
+            if M > 0:
+                dirs_G = np.random.multivariate_normal(np.zeros(dim), cov_G, M)
+                # Normalize each row by its std
+                stds = np.std(dirs_G, axis=1, keepdims=True)
+                stds = np.maximum(stds, 1e-12)
+                dirs_G /= stds
+            else:
+                dirs_G = np.zeros((0, dim))
+        except Exception:
+            dirs_G = np.zeros((0, dim))
+            M = 0
 
-        dirs_L_G_T = np.random.multivariate_normal(np.zeros(dim), np.identity(dim), dim - choices)
+        dirs_rand = np.random.multivariate_normal(np.zeros(dim), np.eye(dim), dim - M)
 
-        dirs = np.concatenate((dirs_L_G, dirs_L_G_T))
+        dirs = np.concatenate((dirs_G, dirs_rand), axis=0)
 
-        return dirs / np.linalg.norm(dirs, axis=-1)[:, np.newaxis], choices
+        # Normalize to unit row norms
+        norms = la.norm(dirs, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-12)
+        dirs /= norms
+
+        return dirs, M

@@ -10,6 +10,7 @@ Usage:
 import argparse
 import logging
 import os
+import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -27,12 +28,19 @@ from optimizers.asgf import ASGF
 from optimizers.ashgf import ASHGF
 
 
+# Determine project root (parent of src/)
+_SCRIPT_DIR = path.dirname(__file__)
+if path.basename(_SCRIPT_DIR) == "src":
+    PROJECT_ROOT = path.dirname(_SCRIPT_DIR)
+else:
+    PROJECT_ROOT = _SCRIPT_DIR
+
 warnings.filterwarnings("default")
 # Ignore the specific deprecation warning from multiprocessing.forkserver
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="multiprocessing")
 
-RESULTS_DIR = path.join("results", "profiles")
-LOG_DIR = path.join("results", "logs")
+RESULTS_DIR = path.join(PROJECT_ROOT, "results", "profiles")
+LOG_DIR = path.join(PROJECT_ROOT, "results", "logs")
 
 
 def setup_logging(log_file: str = "experiments.log") -> logging.Logger:

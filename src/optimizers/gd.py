@@ -6,6 +6,15 @@ from optimizers.base import BaseOptimizer
 
 
 class GD(BaseOptimizer):
+    """
+    Evolution Strategy (ES) optimizer using Central Gaussian Smoothing.
+
+    Corresponds to Algorithm 2 in the thesis.
+    The gradient is estimated via Monte Carlo central finite differences:
+        ∇Fσ(x) ≈ 1/(2σn) Σᵢ (F(x+σξᵢ) - F(x-σξᵢ)) ξᵢ
+    with n = dim random directions ξᵢ ~ N(0, I).
+    """
+
     kind = "Vanilla Gradient Descent"
 
     def __init__(
@@ -33,57 +42,39 @@ class GD(BaseOptimizer):
         debug: bool = True,
         itprint: int = 25,
     ):
-        """
-        Principal method of the class.
-        It optimizes the given function and returns the sequence of values found by the algorithm.
-
-        Args:
-            function: Name of the function to optimize.
-            dim: Dimension of the domain of the function.
-            it: Number of iterations of the algorithm.
-            x_init: Initial point of the algorithm.
-            debug: True if debug prints are wanted.
-            itprint: Iterations to wait before mid-execution print.
-
-        Returns:
-            Tuple of (best_values, all_values).
-            best_values: list containing the best values found during the execution, in descending order.
-            all_values: list containing all the values found during the execution.
-        """
         np.random.seed(self.seed)
-
         f = Function(function)
 
-        if x_init is None:
-            x = np.random.randn(dim)
-        else:
-            x = x_init
+        x = np.random.randn(dim) if x_init is None else x_init.copy()
 
-        steps = {}
-        steps[0] = [x, f.evaluate(x)]
-
-        best_value = steps[0][1]
-        best_values = [[x, best_value]]
+        current_val = f.evaluate(x)
+        best_value = current_val
+        best_values = [[x.copy(), best_value]]
+        all_values = [current_val]
 
         if debug:
-            print("algorithm:", "gd", "function:", function, "dimension:", len(x), "initial value:", steps[0][1])
+            print(f"algorithm: es  function: {function}  dimension: {dim}  initial value: {current_val}")
 
         for i in range(1, it + 1):
             try:
-                if i % itprint == 0:
-                    if debug:
-                        print(i, "th iteration - value:", steps[i - 1][1], "last best value:", best_value)
+                if debug and i % itprint == 0:
+                    print(f"{i}th iteration - value: {current_val}  last best value: {best_value}")
 
-                grad = self.grad_estimator(x, f)
+                grad = self._grad_estimator_vectorized(x, f)
 
-                x = x - self.lr * grad
-                steps[i] = [x, f.evaluate(x)]
-                if steps[i][1] < best_value:
-                    best_value = steps[i][1]
-                    best_values.append([steps[i][0], best_value])
+                x_new = x - self.lr * grad
+                new_val = f.evaluate(x_new)
+                all_values.append(new_val)
 
-                if la.norm(x - steps[i - 1][0]) < self.eps:
+                if new_val < best_value:
+                    best_value = new_val
+                    best_values.append([x_new.copy(), best_value])
+
+                if la.norm(x_new - x) < self.eps:
                     break
+
+                x = x_new
+                current_val = new_val
 
             except Exception as e:
                 print("Something has gone wrong!")
@@ -91,53 +82,37 @@ class GD(BaseOptimizer):
                 break
 
         if debug:
-            print()
-            try:
-                print("last evaluation:", steps[i][1], "last_iterate:", i, "best evaluation:", best_value)
-                print()
-            except:
-                print("last evaluation:", steps[i - 1][1], "last_iterate:", i - 1, "best evaluation:", best_value)
-                print()
+            print(f"\nlast evaluation: {all_values[-1]}  last_iterate: {len(all_values)-1}  best evaluation: {best_value}\n")
 
-        return best_values, [steps[j][1] for j in range(i)]
+        return best_values, all_values
 
-    def grad_estimator(self, x: np.ndarray, f: Function) -> np.ndarray:
+    def _grad_estimator_vectorized(self, x: np.ndarray, f: Function) -> np.ndarray:
         """
-        Performs the Central Gaussian Smoothing around x for the function f.
+        Vectorized Central Gaussian Smoothing gradient estimator.
 
-        Args:
-            x: Point on which the operation is performed.
-            f: Function object over which the smoothing is performed.
+        Instead of looping over dim directions one at a time, we:
+          1. Generate all directions as a (dim, dim) matrix in one call.
+          2. Compute all perturbed points x ± σ·d via broadcasting.
+          3. Evaluate all 2·dim perturbed points.
+          4. Assemble the gradient with a single matrix-vector product.
 
-        Returns:
-            The estimated gradient.
+        This avoids dim Python-level loop iterations and leverages NumPy's
+        optimized BLAS routines for the final dot product.
         """
         dim = len(x)
-        grad = np.zeros(dim)
-        directions = self.compute_directions(dim, dim)
+        directions = np.random.randn(dim, dim)  # (n_dirs, dim)
 
-        for i in range(dim):
-            d = directions[i]
-            dir_plus = x + self.sigma * d
-            dir_minus = x - self.sigma * d
+        # Perturbed points: (dim, dim) each row is x ± sigma * d_i
+        points_plus = x + self.sigma * directions   # (dim, dim)
+        points_minus = x - self.sigma * directions   # (dim, dim)
 
-            evaluations_plus = f.evaluate(dir_plus)
-            evaluations_minus = f.evaluate(dir_minus)
+        # Evaluate all perturbed points
+        evals_plus = np.array([f.evaluate(points_plus[i]) for i in range(dim)])
+        evals_minus = np.array([f.evaluate(points_minus[i]) for i in range(dim)])
 
-            grad += (evaluations_plus - evaluations_minus) * d
+        # Gradient: (1 / 2σn) Σ (f⁺ - f⁻) * d_i
+        diffs = evals_plus - evals_minus  # (dim,)
+        grad = diffs @ directions  # (dim,) @ (dim, dim) -> (dim,)
+        grad /= (2 * self.sigma * dim)
 
-        grad /= 2 * self.sigma * dim
         return grad
-
-    def compute_directions(self, dim_1: int, dim_2: int) -> np.ndarray:
-        """
-        Compute a matrix of random directions.
-
-        Args:
-            dim_1: Number of rows.
-            dim_2: Number of columns.
-
-        Returns:
-            Matrix of directions.
-        """
-        return np.random.randn(dim_1, dim_2)

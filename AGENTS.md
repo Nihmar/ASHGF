@@ -13,9 +13,13 @@ pip install -r requirements.txt
 
 ### Running Experiments
 ```bash
-# Run performance profiles (from src/ directory)
+# Run performance profiles
 cd src
-python profiles.py
+python profiles.py --n-runs 10 --workers 4
+
+# Generate plots from results
+cd src
+python stat_plots.py --dim 100 --plot-comparison --summary
 
 # Run RL experiments
 cd src
@@ -97,10 +101,14 @@ mypy src/
 
 ### Project Structure
 - `src/`: All source code
-  - `gd.py`, `sges.py`, `asebo.py`, `asgf.py`, `ashgf.py`: Algorithm implementations
-  - `functions.py`: Benchmark function definitions
-  - `RL_problems.py`: RL experiment runner
+  - `optimizers/`: Algorithm implementations
+    - `gd.py`, `sges.py`, `asebo.py`, `asgf.py`, `ashgf.py`: Algorithm classes
+    - `base.py`: Base optimizer class
+  - `functions/`: Benchmark function definitions
+    - `benchmarks.py`: 78 benchmark functions
   - `profiles.py`: Performance profile runner
+  - `stat_plots.py`: Plot generation from results
+  - `RL_problems.py`: RL experiment runner
   - `testing_stuffs.py`: Test/demo script
 - `results/`: Generated experiment outputs (gitignored)
 
@@ -143,7 +151,8 @@ mypy src/
 - Avoid global variables for state
 
 ### Notes
-- Results are saved to `results/{dim}/{function}/{algorithm}/descent.csv`
+- Results are saved to `results/profiles/dim=<dim>/results.parquet`
+- Plots are saved to `results/plots/dim=<dim>/<function>/`
 - Seeds are handled separately for algorithm and environment
-- Benchmark functions are defined in `src/functions.py`
+- Benchmark functions are defined in `src/functions/benchmarks.py`
 - The project uses numpy, pandas, matplotlib, scipy, scikit-learn, and gym

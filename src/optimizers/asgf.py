@@ -1,10 +1,7 @@
 import math
-import sys
 
 import numpy as np
 import numpy.linalg as la
-import scipy as sp
-from scipy.linalg import orth
 from scipy.stats import special_ortho_group
 
 from functions import Function
@@ -12,6 +9,20 @@ from optimizers.base import BaseOptimizer
 
 
 class ASGF(BaseOptimizer):
+    """
+    Adaptive Stochastic Gradient-Free (Algorithm 6 + 7 in the thesis).
+
+    Uses Directional Gaussian Smoothing with Gauss-Hermite quadrature to
+    estimate the gradient, plus adaptive learning rate and smoothing parameter.
+
+    BUGFIX vs original code:
+      Lipschitz constant estimation used only consecutive quadrature node
+      pairs (k, k+1), but the thesis (eq. 3.1) specifies all pairs (i,k)
+      in set I where |i - ⌊m/2⌋ - 1| ≠ |k - ⌊m/2⌋ - 1|.  Using only
+      adjacent pairs underestimates the Lipschitz constant, causing the
+      adaptive learning rate to be too large.
+    """
+
     kind = "Adaptive Stochastic Gradient-Free"
 
     data = {
@@ -27,7 +38,7 @@ class ASGF(BaseOptimizer):
         "r": 2,
         "ro": 0.01,
         "epsilon_m": 0.1,
-        "threshold": 10**(-6),
+        "threshold": 1e-6,
         "sigma_zero": 0.01,
     }
 
@@ -43,58 +54,50 @@ class ASGF(BaseOptimizer):
         debug: bool = True,
         itprint: int = 25,
     ):
-        """
-        Principal method of the class.
-        It optimizes the given function and returns the sequence of values found by the algorithm.
-
-        Args:
-            function: Name of the function to optimize.
-            dim: Dimension of the domain of the function.
-            it: Number of iterations of the algorithm.
-            x_init: Initial point of the algorithm.
-            debug: True if debug prints are wanted.
-            itprint: Iterations to wait before mid-execution print.
-
-        Returns:
-            Tuple of (best_values, all_values).
-            best_values: list containing the best values found during the execution, in descending order.
-            all_values: list containing all the values found during the execution.
-        """
         np.random.seed(self.seed)
         f = Function(function)
 
-        if x_init is None:
-            x = np.random.randn(dim)
-        else:
-            x = x_init
+        x = np.random.randn(dim) if x_init is None else x_init.copy()
 
-        steps = {}
-        steps[0] = [x, f.evaluate(x)]
+        current_val = f.evaluate(x)
+        best_value = current_val
+        best_values = [[x.copy(), best_value]]
+        all_values = [current_val]
 
-        best_value = steps[0][1]
-        best_values = [[x, best_value]]
-
-        norm = np.linalg.norm(x)
+        norm = la.norm(x)
         ASGF.data["sigma_zero"] = norm / 10
         sigma = ASGF.data["sigma_zero"]
         A = ASGF.data["A"]
         B = ASGF.data["B"]
         r = ASGF.data["r"]
-        L_nabla = 0
-        lipschitz_coefficients = np.ones((dim,))
+        L_nabla = 0.0
+        lipschitz_coefficients = np.ones(dim)
         basis = special_ortho_group.rvs(dim)
 
+        # Precompute the Gauss-Hermite nodes, weights, and the valid pair
+        # index set I (eq. 3.1) — these are constant across iterations.
+        m = ASGF.data["m"]
+        p_nodes, w_nodes = np.polynomial.hermite.hermgauss(m)
+        p_w = p_nodes * w_nodes
+        mid = m // 2
+        pair_indices = [
+            (a, b)
+            for a in range(m)
+            for b in range(a + 1, m)
+            if abs(a - mid) != abs(b - mid)
+        ]
+
         if debug:
-            print("algorithm:", "asgf", "function:", function, "dimension:", len(x), "initial value:", steps[0][1])
+            print(f"algorithm: asgf  function: {function}  dimension: {dim}  initial value: {current_val}")
 
         for i in range(1, it + 1):
             try:
-                if i % itprint == 0:
-                    if debug:
-                        print(i, "th iteration - value:", steps[i - 1][1], "last best value:", best_value)
+                if debug and i % itprint == 0:
+                    print(f"{i}th iteration - value: {current_val}  last best value: {best_value}")
 
-                grad, lipschitz_coefficients, lr, derivatives, L_nabla = self.grad_estimator(
-                    x, ASGF.data["m"], sigma, len(x), lipschitz_coefficients, basis, f, L_nabla, steps[i - 1][1]
+                grad, lipschitz_coefficients, lr, derivatives, L_nabla = self._grad_estimator(
+                    x, m, sigma, dim, lipschitz_coefficients, basis, f,
+                    L_nabla, current_val, p_nodes, p_w, pair_indices
                 )
 
                 if not np.isfinite(grad).all() or not np.isfinite(lr):
@@ -102,18 +105,23 @@ class ASGF(BaseOptimizer):
                         print(f"Warning: non-finite gradient or learning rate at iteration {i}")
                     break
 
-                x = x - lr * grad
-                steps[i] = [x, f.evaluate(x)]
-                if steps[i][1] < best_value:
-                    best_value = steps[i][1]
-                    best_values.append([steps[i][0], best_value])
+                x_new = x - lr * grad
+                new_val = f.evaluate(x_new)
+                all_values.append(new_val)
 
-                if la.norm(x - steps[i - 1][0]) < self.eps:
+                if new_val < best_value:
+                    best_value = new_val
+                    best_values.append([x_new.copy(), best_value])
+
+                if la.norm(x_new - x) < self.eps:
                     break
                 else:
-                    sigma, basis, A, B, r = self.subroutine(
+                    sigma, basis, A, B, r = self._subroutine(
                         sigma, grad, derivatives, lipschitz_coefficients, A, B, r
                     )
+
+                x = x_new
+                current_val = new_val
 
             except Exception as e:
                 print("Something has gone wrong!")
@@ -121,149 +129,94 @@ class ASGF(BaseOptimizer):
                 break
 
         if debug:
-            print()
-            try:
-                print("last evaluation:", steps[i][1], "last_iterate:", i, "best evaluation:", best_value)
-                print()
-            except:
-                print("last evaluation:", steps[i - 1][1], "last_iterate:", i - 1, "best evaluation:", best_value)
-                print()
+            print(f"\nlast evaluation: {all_values[-1]}  last_iterate: {len(all_values)-1}  best evaluation: {best_value}\n")
 
-        return best_values, [steps[j][1] for j in range(i)]
+        return best_values, all_values
 
-    def grad_estimator(
-        self,
-        x: np.ndarray,
-        m: int,
-        sigma: float,
-        dim: int,
-        lipschitz_coefficients: np.ndarray,
-        basis: np.ndarray,
-        f: Function,
-        L_nabla: float,
-        value: float,
-    ) -> tuple:
+    def _grad_estimator(
+        self, x, m, sigma, dim, lipschitz_coefficients, basis, f,
+        L_nabla, value, p_nodes, p_w, pair_indices
+    ):
         """
-        Estimates the gradient and the learning rate.
+        DGS gradient estimator with Gauss-Hermite quadrature (eq. 2.22).
 
-        Args:
-            x: Point on which the operation is performed.
-            m: Number of points in the numerical approximation.
-            sigma: Smoothing parameter.
-            dim: Dimension of the domain.
-            lipschitz_coefficients: List of lipschitz coefficients.
-            basis: Orthonormal basis for the domain.
-            f: Function object over which the smoothing is performed.
-            L_nabla: Needed to compute learning rate.
-            value: f(x).
-
-        Returns:
-            Tuple of (estimated gradient, updated lipschitz coefficients, learning rate, array of derivatives, updated L_nabla).
+        For each basis direction ξⱼ, evaluates F at m quadrature points along
+        that direction and assembles the directional derivative estimate.
+        Also estimates local Lipschitz constants per direction (eq. 3.1).
         """
-        evaluations = {}
+        norm_factor = 2.0 / (sigma * math.sqrt(math.pi))
+        sigma_p = sigma * p_nodes  # precomputed perturbation magnitudes
 
-        points = {}
-        derivatives = []
-        p_5, w_5 = np.polynomial.hermite.hermgauss(m)
-        p_w_5 = p_5 * w_5
-        sigma_p_5 = sigma * p_5
-        norm_factor = 2 / (sigma * np.sqrt(math.pi))
+        # Evaluate all quadrature points for all directions
+        # evaluations[j][k] = F(x + sigma * p_nodes[k] * basis[j])
+        evaluations = np.empty((dim, m))
+        derivatives = np.empty(dim)
 
-        for i in range(dim):
-            temp = []
-
+        for j in range(dim):
             for k in range(m):
-                if int(m / 2) == k:
-                    evaluation = value
+                if k == m // 2:
+                    evaluations[j, k] = value
                 else:
-                    evaluation = f.evaluate(x + sigma_p_5[k] * basis[i])
-                temp.append(evaluation)
+                    evaluations[j, k] = f.evaluate(x + sigma_p[k] * basis[j])
 
-            new_estimate = norm_factor * np.sum(p_w_5 * np.array(temp))
+            derivatives[j] = norm_factor * np.dot(p_w, evaluations[j])
 
-            points[i] = p_5
-            evaluations[i] = temp
-            derivatives.append(new_estimate)
+        # Assemble gradient: g = Σⱼ derivatives[j] * basis[j]
+        grad = derivatives @ basis  # (dim,) @ (dim, dim) -> (dim,)
 
-        grad = np.zeros(x.shape)
-
-        for i in range(len(x)):
-            grad = grad + derivatives[i] * basis[i]
-
-        for i in range(len(grad)):
-            temp = 0
-            for k in range(len(points[i]) - 1):
-                denom = sigma * (points[i][k + 1] - points[i][k])
+        # Estimate local Lipschitz constants (eq. 3.1)
+        # FIX: use all pairs in set I, not just adjacent pairs
+        for j in range(dim):
+            lip = 0.0
+            for a, b in pair_indices:
+                denom = sigma * (p_nodes[a] - p_nodes[b])
                 if abs(denom) > 1e-12:
-                    value = np.abs((evaluations[i][k + 1] - evaluations[i][k]) / denom)
-                    if value > temp:
-                        temp = value
-
-            lipschitz_coefficients[i] = temp
+                    val = abs((evaluations[j, a] - evaluations[j, b]) / denom)
+                    if val > lip:
+                        lip = val
+            lipschitz_coefficients[j] = lip
 
         L_nabla = (1 - ASGF.data["gamma_L"]) * lipschitz_coefficients[0] + ASGF.data["gamma_L"] * L_nabla
+        lr = sigma / max(L_nabla, 1e-12)
 
-        lr = sigma / L_nabla
+        return grad, lipschitz_coefficients, lr, derivatives, L_nabla
 
-        return grad, lipschitz_coefficients, lr, np.array(derivatives), L_nabla
-
-    def subroutine(
-        self, sigma: float, grad: np.ndarray, derivatives: np.ndarray, lipschitz_coefficients: np.ndarray, A: float, B: float, r: int
-    ) -> tuple:
+    def _subroutine(self, sigma, grad, derivatives, lipschitz_coefficients, A, B, r):
         """
-        Subroutine that updates the parameters of the algorithm to adapt it to the function.
-
-        Args:
-            sigma: Smoothing parameter.
-            grad: Estimated gradient.
-            derivatives: Estimated directional derivative.
-            lipschitz_coefficients: List of lipschitz coefficients.
-            A, B, r: Parameters of the algorithm.
-
-        Returns:
-            Tuple of (sigma, basis, A, B, r).
+        Parameter update (Algorithm 7).
+        Adapts sigma and builds a new orthonormal basis with the gradient
+        as first direction.
         """
+        dim = len(grad)
+
         if r > 0 and sigma < ASGF.data["ro"] * ASGF.data["sigma_zero"]:
-            basis = sp.stats.special_ortho_group.rvs(len(grad))
+            basis = special_ortho_group.rvs(dim)
             sigma = ASGF.data["sigma_zero"]
             A = ASGF.data["A"]
             B = ASGF.data["B"]
-            r = r - 1
-
+            r -= 1
             return sigma, basis, A, B, r
 
+        # Build basis with grad as first direction, then orthonormalize
+        basis = special_ortho_group.rvs(dim)
+        grad_norm = la.norm(grad)
+        if grad_norm > 1e-10:
+            basis[0] = grad / grad_norm
+
+        Q, _ = la.qr(basis.T)
+        basis = Q.T
+
+        lipschitz_coefficients = np.maximum(lipschitz_coefficients, 1e-10)
+        ratio = np.max(np.abs(derivatives / lipschitz_coefficients))
+
+        if ratio < A:
+            sigma *= ASGF.data["gamma_sigma"]
+            A *= ASGF.data["A_minus"]
+        elif ratio > B:
+            sigma /= ASGF.data["gamma_sigma"]
+            B *= ASGF.data["B_plus"]
         else:
-            basis = sp.stats.special_ortho_group.rvs(len(grad))
-            grad_norm = np.linalg.norm(grad)
-            if grad_norm > 1e-10:
-                basis[0] = grad / grad_norm
-            
-            # Use QR decomposition to orthonormalize rows
-            # basis.T has shape (len(grad), len(grad))
-            # qr(basis.T) returns Q with orthonormal columns
-            # We want orthonormal rows, so we take Q.T
-            Q, R = np.linalg.qr(basis.T)
-            basis = Q.T
+            A *= ASGF.data["A_plus"]
+            B *= ASGF.data["B_minus"]
 
-            # Avoid division by zero in lipschitz_coefficients
-            lipschitz_coefficients = np.maximum(lipschitz_coefficients, 1e-10)
-            
-            value = np.max(np.abs(derivatives / lipschitz_coefficients))
-
-            if value < A:
-                sigma = sigma * ASGF.data["gamma_sigma"]
-                A = A * ASGF.data["A_minus"]
-
-                return sigma, basis, A, B, r
-
-            elif value > B:
-                sigma = sigma / ASGF.data["gamma_sigma"]
-                B = B * ASGF.data["B_plus"]
-
-                return sigma, basis, A, B, r
-
-            else:
-                A = A * ASGF.data["A_plus"]
-                B = B * ASGF.data["B_minus"]
-
-                return sigma, basis, A, B, r
+        return sigma, basis, A, B, r

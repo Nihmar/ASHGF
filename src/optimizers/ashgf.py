@@ -3,7 +3,6 @@ import sys
 
 import numpy as np
 import numpy.linalg as la
-import scipy as sp
 from scipy.linalg import orth
 from scipy.stats import special_ortho_group
 
@@ -12,6 +11,25 @@ from optimizers.base import BaseOptimizer
 
 
 class ASHGF(BaseOptimizer):
+    """
+    Adaptive Stochastic Historical Gradient-Free (Algorithms 8 + 9 in thesis).
+
+    Combines Directional Gaussian Smoothing (from ASGF) with historical
+    gradient-guided direction sampling (from SGES) and adaptive sigma / lr.
+
+    FIXES vs original code:
+      1. L∇ update (eq. 3.2): the thesis says L_G is the max of Lipschitz
+         constants for the M directions sampled from the gradient subspace.
+         The original code had a fragile try/except that could silently fall
+         back to incorrect values.  Now handled cleanly.
+      2. The pair index set I for Lipschitz estimation is precomputed once
+         instead of being rebuilt every call (the original `buffer` variable
+         had a subtle bug: `if [i,j] or [j,i] not in buffer` always
+         evaluated to True because `[i,j]` is truthy as a non-empty list —
+         the `or` short-circuits before reaching `not in buffer`).
+      3. Basis complementing logic in subroutine is simplified and more robust.
+    """
+
     kind = "Adaptive Stochastic Historical Gradient-Free"
 
     data = {
@@ -28,7 +46,7 @@ class ASHGF(BaseOptimizer):
         "gamma_sigma_minus": 0.9,
         "r": 10,
         "ro": 0.01,
-        "threshold": 10**(-6),
+        "threshold": 1e-6,
         "sigma_zero": 0.01,
     }
 
@@ -58,109 +76,108 @@ class ASHGF(BaseOptimizer):
         debug: bool = True,
         itprint: int = 25,
     ):
-        """
-        Principal method of the class.
-        It optimizes the given function and returns the sequence of values found by the algorithm.
-
-        Args:
-            function: Name of the function to optimize.
-            dim: Dimension of the domain of the function.
-            it: Number of iterations of the algorithm.
-            x_init: Initial point of the algorithm.
-            debug: True if debug prints are wanted.
-            itprint: Iterations to wait before mid-execution print.
-
-        Returns:
-            Tuple of (best_values, all_values).
-            best_values: list containing the best values found during the execution, in descending order.
-            all_values: list containing all the values found during the execution.
-        """
         np.random.seed(self.seed)
         f = Function(function)
         alpha = self.alpha
 
-        if x_init is None:
-            x = np.random.randn(dim)
-        else:
-            x = x_init
+        x = np.random.randn(dim) if x_init is None else x_init.copy()
 
-        steps = {}
-        steps[0] = [x, f.evaluate(x)]
+        current_val = f.evaluate(x)
+        best_value = current_val
+        best_values = [[x.copy(), best_value]]
+        all_values = [current_val]
 
-        best_value = steps[0][1]
-        best_values = [[x, best_value]]
-
-        norm = np.linalg.norm(x)
-        ASHGF.data["sigma_zero"] = norm / 10
+        norm_x = la.norm(x)
+        ASHGF.data["sigma_zero"] = norm_x / 10
         sigma = ASHGF.data["sigma_zero"]
         A = ASHGF.data["A"]
         B = ASHGF.data["B"]
         r = ASHGF.data["r"]
-        L_nabla = 0
+        L_nabla = 0.0
         M = dim
-        lipschitz_coefficients = np.ones((dim,))
+        lipschitz_coefficients = np.ones(dim)
         basis = special_ortho_group.rvs(dim)
 
         G = []
 
+        # Precompute quadrature nodes/weights and the valid pair index set I.
+        m = ASHGF.data["m"]
+        p_nodes, w_nodes = np.polynomial.hermite.hermgauss(m)
+        p_w = p_nodes * w_nodes
+        mid = m // 2
+
+        # FIX: The original code had `if [i, j] or [j, i] not in buffer`
+        # which is always True because `[i, j]` (a non-empty list) is truthy,
+        # so the `or` short-circuits.  Correct logic: pairs (a,b) where
+        # |a - mid| != |b - mid|, with a < b to avoid duplicates.
+        pair_indices = [
+            (a, b)
+            for a in range(m)
+            for b in range(a + 1, m)
+            if abs(a - mid) != abs(b - mid)
+        ]
+
         if debug:
-            print("algorithm:", "ashgf", "function:", function, "dimension:", len(x), "initial value:", steps[0][1])
+            print(f"algorithm: ashgf  function: {function}  dimension: {dim}  initial value: {current_val}")
 
         for i in range(1, it + 1):
             try:
-                if i % itprint == 0:
-                    if debug:
-                        print(i, "th iteration - value:", steps[i - 1][1], "last best value:", best_value)
+                if debug and i % itprint == 0:
+                    print(f"{i}th iteration - value: {current_val}  last best value: {best_value}")
 
-                grad, lipschitz_coefficients, lr, derivatives, L_nabla, evaluations = self.grad_estimator(
-                    x, ASHGF.data["m"], sigma, len(x), lipschitz_coefficients, basis, f, L_nabla, M, steps[i - 1][1]
+                grad, lipschitz_coefficients, lr, derivatives, L_nabla, evaluations = (
+                    self._grad_estimator(
+                        x, m, sigma, dim, lipschitz_coefficients, basis, f,
+                        L_nabla, M, current_val, p_nodes, p_w, pair_indices
+                    )
                 )
 
-                if np.isfinite(grad).all() and np.isfinite(lr):
-                    G.append(grad)
-                    if len(G) > self.t:
-                        G = G[1:]
-                    x = x - lr * grad
-                else:
+                if not (np.isfinite(grad).all() and np.isfinite(lr)):
                     if debug:
                         print(f"Warning: non-finite gradient or learning rate at iteration {i}")
                     break
 
-                steps[i] = [x, f.evaluate(x)]
-                if steps[i][1] < best_value:
-                    best_value = steps[i][1]
-                    best_values.append([steps[i][0], best_value])
+                G.append(grad)
+                if len(G) > self.t:
+                    G = G[1:]
 
-                if la.norm(x - steps[i - 1][0]) < self.eps:
+                x_new = x - lr * grad
+                new_val = f.evaluate(x_new)
+                all_values.append(new_val)
+
+                if new_val < best_value:
+                    best_value = new_val
+                    best_values.append([x_new.copy(), best_value])
+
+                if la.norm(x_new - x) < self.eps:
                     break
                 else:
+                    # Decide whether to use historical gradients
                     if i < self.t:
                         historical = False
-
                     else:
                         if i >= self.t + 1:
-                            try:
-                                r_ = (1 / M) * np.sum([min(evaluations[j]) for j in range(M)])
-                            except:
-                                r_ = False
+                            # Adapt alpha (eq. 2.14)
+                            # Handle edge cases where M=0 or M=dim (empty ranges)
+                            vals_G = [min(evaluations[j]) for j in range(M)] if M > 0 else []
+                            vals_ort = [min(evaluations[j]) for j in range(M, dim)] if M < dim else []
 
-                            try:
-                                r_hat = (1 / (dim - M)) * np.sum([min(evaluations[j]) for j in range(M, dim)])
-                            except:
-                                r_hat = False
+                            r_G = np.mean(vals_G) if vals_G else None
+                            r_G_ort = np.mean(vals_ort) if vals_ort else None
 
-                            if not r_ or r_ < r_hat:
-                                alpha = min([self.delta * alpha, self.k1])
-                            elif not r_hat or r_ >= r_hat:
-                                alpha = max([(1 / self.delta) * alpha, self.k2])
-                            else:
-                                pass
+                            if r_G is None or (r_G_ort is not None and r_G < r_G_ort):
+                                alpha = min(self.delta * alpha, self.k1)
+                            elif r_G_ort is None or r_G >= r_G_ort:
+                                alpha = max((1 / self.delta) * alpha, self.k2)
 
                         historical = True
 
-                    sigma, basis, A, B, r, M = self.subroutine(
+                    sigma, basis, A, B, r, M = self._subroutine(
                         sigma, grad, derivatives, lipschitz_coefficients, A, B, r, G, alpha, historical
                     )
+
+                x = x_new
+                current_val = new_val
 
             except Exception as e:
                 print("Something has gone wrong!")
@@ -168,222 +185,153 @@ class ASHGF(BaseOptimizer):
                 break
 
         if debug:
-            print()
-            try:
-                print("last evaluation:", steps[i][1], "last_iterate:", i, "best evaluation:", best_value)
-                print()
-            except:
-                print("last evaluation:", steps[i - 1][1], "last_iterate:", i - 1, "best evaluation:", best_value)
-                print()
+            print(f"\nlast evaluation: {all_values[-1]}  last_iterate: {len(all_values)-1}  best evaluation: {best_value}\n")
 
-        return best_values, [steps[j][1] for j in range(i)]
+        return best_values, all_values
 
-    def grad_estimator(
-        self,
-        x: np.ndarray,
-        m: int,
-        sigma: float,
-        dim: int,
-        lipschitz_coefficients: np.ndarray,
-        basis: np.ndarray,
-        f: Function,
-        L_nabla: float,
-        M: int,
-        value: float,
-    ) -> tuple:
+    def _grad_estimator(
+        self, x, m, sigma, dim, lipschitz_coefficients, basis, f,
+        L_nabla, M, value, p_nodes, p_w, pair_indices
+    ):
         """
-        Estimates the gradient and the learning rate.
-
-        Args:
-            x: Point on which the operation is performed.
-            m: Number of points in the numerical approximation.
-            sigma: Smoothing parameter.
-            dim: Dimension of the domain.
-            lipschitz_coefficients: List of lipschitz coefficients.
-            basis: Orthonormal basis for the domain.
-            f: Function object over which the smoothing is performed.
-            L_nabla: Needed to compute learning rate.
-            M: Number of directions sampled from gradient subspace.
-            value: f(x).
-
-        Returns:
-            Tuple of (estimated gradient, updated lipschitz coefficients, learning rate, array of derivatives, updated L_nabla, evaluations).
+        DGS gradient estimator with Gauss-Hermite quadrature (eq. 2.22)
+        plus Lipschitz constant estimation (eq. 3.1) and adaptive lr (eq. 3.2).
         """
+        norm_factor = 2.0 / (sigma * math.sqrt(math.pi))
+        sigma_p = sigma * p_nodes
+
         evaluations = {}
+        derivatives = np.empty(dim)
 
-        points = {}
-        derivatives = []
-        p_5, w_5 = np.polynomial.hermite.hermgauss(m)
-        p_w_5 = p_5 * w_5
-        sigma_p_5 = sigma * p_5
-        norm_factor = 2 / (sigma * np.sqrt(math.pi))
-
-        buffer = []
-        n = m
-
-        for i in range(n):
-            for j in range(n):
-                if [i, j] or [j, i] not in buffer:
-                    if np.abs(i - int(m / 2)) != np.abs(j - int(m / 2)):
-                        buffer.append([i, j])
-
-        for i in range(dim):
-            temp = []
-
+        for j in range(dim):
+            temp = np.empty(m)
             for k in range(m):
-                try:
-                    if int(m / 2) == k:
-                        evaluation = value
-                    else:
-                        evaluation = f.evaluate(x + sigma_p_5[k] * basis[i])
-                    temp.append(evaluation)
-                except:
-                    print(x.shape, basis.shape)
-                    sys.exit(1)
+                if k == m // 2:
+                    temp[k] = value
+                else:
+                    temp[k] = f.evaluate(x + sigma_p[k] * basis[j])
 
-            new_estimate = norm_factor * np.sum(p_w_5 * np.array(temp))
+            derivatives[j] = norm_factor * np.dot(p_w, temp)
+            evaluations[j] = temp
 
-            points[i] = p_5
-            evaluations[i] = temp
-            derivatives.append(new_estimate)
+        # Assemble gradient
+        grad = derivatives @ basis
 
-        grad = np.zeros(x.shape)
-
-        for i in range(len(x)):
-            grad = grad + derivatives[i] * basis[i]
-
-        for i in range(len(grad)):
-            temp = 0
-            for couple in buffer:
-                denom = sigma * (points[i][couple[0]] - points[i][couple[1]])
+        # Estimate Lipschitz constants (eq. 3.1) using precomputed pair set I
+        for j in range(dim):
+            lip = 0.0
+            evals_j = evaluations[j]
+            for a, b in pair_indices:
+                denom = sigma * (p_nodes[a] - p_nodes[b])
                 if abs(denom) > 1e-12:
-                    value = np.abs((evaluations[i][couple[0]] - evaluations[i][couple[1]]) / denom)
-                    if value > temp:
-                        temp = value
+                    val = abs((evals_j[a] - evals_j[b]) / denom)
+                    if val > lip:
+                        lip = val
+            lipschitz_coefficients[j] = lip
 
-            lipschitz_coefficients[i] = temp
+        # Adaptive learning rate (eq. 3.2)
+        # L_G = max of Lipschitz constants for the first M directions
+        # (those sampled from gradient subspace)
+        M_eff = max(1, min(M, dim))
+        L_G = np.max(lipschitz_coefficients[:M_eff])
+        L_nabla = (1 - ASHGF.data["gamma_L"]) * L_G + ASHGF.data["gamma_L"] * L_nabla
+        lr = sigma / max(L_nabla, 1e-12)
 
-        try:
-            if M > 0 and len(lipschitz_coefficients) > 0:
-                L_nabla = (1 - ASHGF.data["gamma_L"]) * np.max(lipschitz_coefficients[:M]) + ASHGF.data["gamma_L"] * L_nabla
-            else:
-                L_nabla = max(lipschitz_coefficients) if len(lipschitz_coefficients) > 0 else 1.0
-        except Exception:
-            L_nabla = max(lipschitz_coefficients) if len(lipschitz_coefficients) > 0 else 1.0
+        return grad, lipschitz_coefficients, lr, derivatives, L_nabla, evaluations
 
-        lr = sigma / L_nabla
-
-        return grad, lipschitz_coefficients, lr, np.array(derivatives), L_nabla, evaluations
-
-    def subroutine(
-        self,
-        sigma: float,
-        grad: np.ndarray,
-        derivatives: np.ndarray,
-        lipschitz_coefficients: np.ndarray,
-        A: float,
-        B: float,
-        r: int,
-        G: np.ndarray,
-        alpha: float,
-        historical: bool,
-    ) -> tuple:
+    def _subroutine(
+        self, sigma, grad, derivatives, lipschitz_coefficients, A, B, r,
+        G, alpha, historical
+    ):
         """
-        Subroutine that updates the parameters of the algorithm to adapt it to the function.
-
-        Args:
-            sigma: Smoothing parameter.
-            grad: Estimated gradient.
-            derivatives: Estimated directional derivative.
-            lipschitz_coefficients: List of lipschitz coefficients.
-            A, B, r: Parameters of the algorithm.
-            G: Buffer of gradients, 2-D array.
-            alpha: Probability of sampling from gradient subspace.
-            historical: If true, use G.
-
-        Returns:
-            Tuple of (sigma, basis, A, B, r, M).
+        Parameter update (Algorithm 9).
+        Updates sigma, builds new basis (optionally using gradient history).
         """
+        dim = len(grad)
+
         if r > 0 and sigma < ASHGF.data["ro"] * ASHGF.data["sigma_zero"]:
-            basis = sp.stats.special_ortho_group.rvs(len(grad))
+            basis = special_ortho_group.rvs(dim)
             sigma = ASHGF.data["sigma_zero"]
             A = ASHGF.data["A"]
             B = ASHGF.data["B"]
-            r = r - 1
-            M = int(len(grad) / 2)
+            r -= 1
+            M = dim // 2
             return sigma, basis, A, B, r, M
 
+        if historical:
+            dirs, M = self._compute_directions_sges(dim, G, alpha)
+            basis = orth(dirs)
         else:
-            if historical:
-                basis, M = self.compute_directions_sges(len(grad), G, alpha)
-                basis = orth(basis)
-            else:
-                M = int(len(grad) / 2)
-                basis = sp.stats.special_ortho_group.rvs(len(grad))
+            M = dim // 2
+            basis = special_ortho_group.rvs(dim)
 
-            while basis.shape != (len(grad), len(grad)):
-                v = np.random.randn(len(grad), len(grad) - basis.shape[1])
-                basis = np.concatenate((basis.T, v.T))
-                basis = orth(basis)
+        # Ensure basis spans R^dim (complement if rank-deficient)
+        while basis.shape[1] < dim:
+            v = np.random.randn(dim, dim - basis.shape[1])
+            basis = np.hstack([basis, v])
+            basis = orth(basis)
 
-            value = np.max(np.abs(derivatives / lipschitz_coefficients))
+        # orth returns (dim, rank) — we need (dim, dim) then transpose
+        # so that rows are basis vectors
+        if basis.shape[0] == dim and basis.shape[1] == dim:
+            basis = basis.T  # rows = basis vectors
+        elif basis.shape != (dim, dim):
+            # fallback: random orthonormal basis
+            basis = special_ortho_group.rvs(dim)
 
-            if value < A:
-                sigma = sigma * ASHGF.data["gamma_sigma_minus"]
-                A = A * ASHGF.data["A_minus"]
+        # Adapt sigma based on derivative/Lipschitz ratio
+        lipschitz_coefficients = np.maximum(lipschitz_coefficients, 1e-10)
+        ratio = np.max(np.abs(derivatives / lipschitz_coefficients))
 
-                return sigma, basis, A, B, r, M
+        if ratio < A:
+            sigma *= ASHGF.data["gamma_sigma_minus"]
+            A *= ASHGF.data["A_minus"]
+        elif ratio > B:
+            sigma *= ASHGF.data["gamma_sigma_plus"]
+            B *= ASHGF.data["B_plus"]
+        else:
+            A *= ASHGF.data["A_plus"]
+            B *= ASHGF.data["B_minus"]
 
-            elif value > B:
-                sigma = sigma * ASHGF.data["gamma_sigma_plus"]
-                B = B * ASHGF.data["B_plus"]
+        return sigma, basis, A, B, r, M
 
-                return sigma, basis, A, B, r, M
-
-            else:
-                A = A * ASHGF.data["A_plus"]
-                B = B * ASHGF.data["B_minus"]
-
-                return sigma, basis, A, B, r, M
-
-    def compute_directions_sges(self, dim: int, G: np.ndarray, alpha: float) -> tuple:
+    def _compute_directions_sges(self, dim: int, G: list, alpha: float):
         """
-        Compute a matrix of random directions depending on gradient information.
-
-        Args:
-            dim: Number of rows and columns.
-            G: Buffer of gradients, 2-D array.
-            alpha: Probability of sampling from gradients.
-
-        Returns:
-            Tuple of (matrix of directions, number of directions sampled from gradients).
+        Compute directions: M from gradient covariance, (dim-M) from N(0,I).
+        Returns (directions matrix, M).
         """
-        G = np.array(G)
-        
-        G_clean = G[~np.isnan(G).any(axis=1)]
+        G_arr = np.array(G)
+        G_clean = G_arr[~np.isnan(G_arr).any(axis=1)]
+
         if len(G_clean) < 2:
-            cov_L_G = np.eye(dim)
+            cov_G = np.eye(dim)
         else:
-            cov_L_G = np.cov(G_clean.T)
-            cov_L_G = (cov_L_G + cov_L_G.T) / 2
-            eigvals = np.linalg.eigvalsh(cov_L_G)
+            cov_G = np.cov(G_clean.T)
+            cov_G = (cov_G + cov_G.T) / 2
+            eigvals = la.eigvalsh(cov_G)
             if eigvals.min() < 0:
-                cov_L_G = cov_L_G - eigvals.min() * np.eye(dim)
+                cov_G -= eigvals.min() * np.eye(dim)
 
-        choices = 0
-
-        for i in range(dim):
-            choices += int(np.random.choice([0, 1], p=[alpha, 1 - alpha]))
+        M = np.random.binomial(dim, 1 - alpha)
+        M = max(0, min(M, dim))
 
         try:
-            dirs_L_G = np.random.multivariate_normal(np.zeros(dim), cov_L_G, choices)
-            for i in range(choices):
-                dirs_L_G[i] = dirs_L_G[i] / np.std(dirs_L_G[i])
-        except:
-            dirs_L_G = np.zeros((0, dim))
+            if M > 0:
+                dirs_G = np.random.multivariate_normal(np.zeros(dim), cov_G, M)
+                stds = np.std(dirs_G, axis=1, keepdims=True)
+                stds = np.maximum(stds, 1e-12)
+                dirs_G /= stds
+            else:
+                dirs_G = np.zeros((0, dim))
+        except Exception:
+            dirs_G = np.zeros((0, dim))
+            M = 0
 
-        dirs_L_G_T = np.random.multivariate_normal(np.zeros(dim), np.identity(dim), dim - choices)
+        dirs_rand = np.random.multivariate_normal(np.zeros(dim), np.eye(dim), dim - M)
+        dirs = np.concatenate((dirs_G, dirs_rand), axis=0)
 
-        dirs = np.concatenate((dirs_L_G, dirs_L_G_T))
+        norms = la.norm(dirs, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-12)
+        dirs /= norms
 
-        return dirs / np.linalg.norm(dirs, axis=-1)[:, np.newaxis], choices
+        return dirs, M

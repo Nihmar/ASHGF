@@ -6,9 +6,17 @@ This script loads results from Parquet files and generates convergence plots.
 
 import argparse
 import os
+import sys
 import warnings
 from os import path
 from typing import Dict, List, Optional
+
+# Determine project root (parent of src/)
+_SCRIPT_DIR = path.dirname(__file__)
+if path.basename(_SCRIPT_DIR) == "src":
+    PROJECT_ROOT = path.dirname(_SCRIPT_DIR)
+else:
+    PROJECT_ROOT = _SCRIPT_DIR
 
 # Ignore the specific deprecation warning from multiprocessing.forkserver
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="multiprocessing")
@@ -25,7 +33,7 @@ DEFAULT_ALGORITHMS: List[str] = ["GD", "SGES", "ASGF", "ASHGF", "ASEBO"]
 
 def get_results_path(dim: int) -> str:
     """Get path to results Parquet file for a given dimension."""
-    return os.path.join("results", "profiles", f"dim={dim}", "results.parquet")
+    return os.path.join(PROJECT_ROOT, "results", "profiles", f"dim={dim}", "results.parquet")
 
 
 def load_results(dim: int) -> pd.DataFrame:
@@ -68,12 +76,14 @@ def compute_statistics(values_list: List[List[float]]) -> Dict[str, np.ndarray]:
     Returns:
         Dictionary with min, max, mean, std arrays.
     """
+    # Ensure all elements are lists (handle numpy arrays from parquet)
+    values_list = [list(v) if hasattr(v, '__iter__') and not isinstance(v, str) else v for v in values_list]
     min_len = max(len(v) for v in values_list) if values_list else 0
 
     padded = []
     for v in values_list:
         if len(v) < min_len:
-            v = v + [np.nan] * (min_len - len(v))
+            v = list(v) + [np.nan] * (min_len - len(v))
         padded.append(v)
 
     arr = np.array(padded)
@@ -283,7 +293,7 @@ def main() -> None:
     print(f"Functions: {args.functions}")
     print(f"Algorithms: {args.algorithms}")
 
-    base_output_dir = os.path.join("results", "plots", f"dim={args.dim}")
+    base_output_dir = os.path.join(PROJECT_ROOT, "results", "plots", f"dim={args.dim}")
 
     # Generate plots for each function in its own folder
     for function in args.functions:

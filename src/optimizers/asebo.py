@@ -10,6 +10,19 @@ from optimizers.base import BaseOptimizer
 
 
 class ASEBO(BaseOptimizer):
+    """
+    Adaptive ES-Active Subspaces (Algorithm 3 in the thesis).
+
+    Uses PCA on gradient history to discover an active subspace, then
+    samples directions from a mixture of the subspace and the full space.
+
+    BUGFIX vs original code:
+      The gradient was divided by (2σ) but NOT by n_samples.  The thesis
+      (Algorithm 3, line 11) specifies: ∇ = 1/(2n_t σ) Σ (F⁺-F⁻) gⱼ.
+      Missing the 1/n_t factor makes the gradient estimate scale with the
+      number of samples, which breaks the learning rate tuning.
+    """
+
     kind = "Adaptive ES-Active Subspaces"
 
     def __init__(
@@ -18,7 +31,7 @@ class ASEBO(BaseOptimizer):
         sigma: float = 1e-4,
         k: int = 50,
         lambd: float = 0.1,
-        thresh: float = 10**(-4),
+        thresh: float = 1e-4,
         seed: int = 2003,
         eps: float = 1e-8,
     ):
@@ -43,51 +56,28 @@ class ASEBO(BaseOptimizer):
         debug: bool = True,
         itprint: int = 25,
     ):
-        """
-        Principal method of the class.
-        It optimizes the given function and returns the sequence of values found by the algorithm.
-
-        Args:
-            function: Name of the function to optimize.
-            dim: Dimension of the domain of the function.
-            it: Number of iterations of the algorithm.
-            x_init: Initial point of the algorithm.
-            debug: True if debug prints are wanted.
-            itprint: Iterations to wait before mid-execution print.
-
-        Returns:
-            Tuple of (best_values, all_values).
-            best_values: list containing the best values found during the execution, in descending order.
-            all_values: list containing all the values found during the execution.
-        """
         np.random.seed(self.seed)
-
         f = Function(function)
 
-        if x_init is None:
-            x = np.random.randn(dim)
-        else:
-            x = x_init
+        x = np.random.randn(dim) if x_init is None else x_init.copy()
 
-        steps = {}
-        steps[0] = [x, f.evaluate(x)]
+        current_val = f.evaluate(x)
+        best_value = current_val
+        best_values = [[x.copy(), best_value]]
+        all_values = [current_val]
 
-        best_value = steps[0][1]
-        best_values = [[x, best_value]]
-
-        alpha = 1
+        alpha = 1.0
         G = []
 
         if debug:
-            print("algorithm:", "asebo", "function:", function, "dimension:", len(x), "initial value:", steps[0][1])
+            print(f"algorithm: asebo  function: {function}  dimension: {dim}  initial value: {current_val}")
 
         for i in range(1, it + 1):
             try:
-                if i % itprint == 0:
-                    if debug:
-                        print(i, "th iteration - value:", steps[i - 1][1], "last best value:", best_value)
+                if debug and i % itprint == 0:
+                    print(f"{i}th iteration - value: {current_val}  last best value: {best_value}")
 
-                grad, alpha = self.grad_estimator(x, G, i, alpha, f)
+                grad, alpha = self._grad_estimator(x, G, i, alpha, f, dim)
 
                 if not np.isfinite(grad).all():
                     if debug:
@@ -95,19 +85,24 @@ class ASEBO(BaseOptimizer):
                     break
 
                 if i == 1:
-                    G = np.array(grad)
+                    G = grad.reshape(1, -1)
                 else:
-                    G *= 0.99
-                    G = np.vstack([G, grad])
+                    G *= 0.99  # decay
+                    G = np.vstack([G, grad.reshape(1, -1)])
 
-                x = x - self.lr * grad
-                steps[i] = [x, f.evaluate(x)]
-                if steps[i][1] < best_value:
-                    best_value = steps[i][1]
-                    best_values.append([steps[i][0], best_value])
+                x_new = x - self.lr * grad
+                new_val = f.evaluate(x_new)
+                all_values.append(new_val)
 
-                if la.norm(x - steps[i - 1][0]) < self.eps:
+                if new_val < best_value:
+                    best_value = new_val
+                    best_values.append([x_new.copy(), best_value])
+
+                if la.norm(x_new - x) < self.eps:
                     break
+
+                x = x_new
+                current_val = new_val
 
             except Exception as e:
                 print("Something has gone wrong!")
@@ -115,98 +110,82 @@ class ASEBO(BaseOptimizer):
                 break
 
         if debug:
-            print()
-            try:
-                print("last evaluation:", steps[i][1], "last_iterate:", i, "best evaluation:", best_value)
-                print()
-            except:
-                print("last evaluation:", steps[i - 1][1], "last_iterate:", i - 1, "best evaluation:", best_value)
-                print()
+            print(f"\nlast evaluation: {all_values[-1]}  last_iterate: {len(all_values)-1}  best evaluation: {best_value}\n")
 
-        return best_values, [steps[j][1] for j in range(i)]
+        return best_values, all_values
 
-    def grad_estimator(self, x: np.ndarray, G: np.ndarray, i: int, alpha: float, f: Function) -> tuple:
+    def _grad_estimator(self, x: np.ndarray, G, i: int, alpha: float,
+                         f: Function, dim: int):
         """
-        Performs the Central Gaussian Smoothing around x for the function f.
+        ASEBO gradient estimator.
 
-        Args:
-            x: Point on which the operation is performed.
-            G: Buffer of gradients, 2-D array.
-            i: Iteration.
-            alpha: Momentum of covariance.
-            f: Function object over which the smoothing is performed.
+        For i < k: uses n_samples=100 random directions from N(0, I).
+        For i >= k: uses PCA on gradient history to build a covariance
+        matrix that biases sampling toward the active subspace.
 
-        Returns:
-            Tuple of (estimated gradient, alpha).
+        FIX: gradient is now divided by (2 * sigma * n_samples) instead of
+        just (2 * sigma).
         """
-        if i >= self.k:
+        n_samples = 100
+        UUT = np.zeros((dim, dim))
+        UUT_ort = np.zeros((dim, dim))
+
+        if i >= self.k and isinstance(G, np.ndarray) and len(G) >= 2:
             G_clean = G[~np.isnan(G).any(axis=1)]
-            if len(G_clean) < 2:
-                UUT = np.zeros([len(x), len(x)])
-                UUT_ort = np.zeros([len(x), len(x)])
-                alpha = 1
-                n_samples = 100
-            else:
+            if len(G_clean) >= 2:
                 pca = PCA()
-                pca_fit = pca.fit(G_clean)
-                var_exp = pca_fit.explained_variance_ratio_
-                var_exp = np.cumsum(var_exp)
-                n_samples = np.argmax(var_exp > self.thresh) + 1
+                pca.fit(G_clean)
+                var_exp = np.cumsum(pca.explained_variance_ratio_)
+                n_samples = max(10, np.argmax(var_exp > self.thresh) + 1)
 
-                if n_samples < 10:
-                    n_samples = 10
-
-                U = pca_fit.components_[:n_samples]
-                UUT = np.matmul(U.T, U)
-                U_ort = pca_fit.components_[n_samples:]
-                UUT_ort = np.matmul(U_ort.T, U_ort)
+                U = pca.components_[:n_samples]
+                UUT = U.T @ U
+                U_ort = pca.components_[n_samples:]
+                UUT_ort = U_ort.T @ U_ort
 
                 if i == self.k:
                     n_samples = 100
-
+            else:
+                alpha = 1.0
         else:
-            UUT = np.zeros([len(x), len(x)])
-            UUT_ort = np.zeros([len(x), len(x)])
-            alpha = 1
-            n_samples = 100
+            alpha = 1.0
 
-        cov = (alpha / len(x)) * np.eye(len(x)) + ((1 - alpha) / n_samples) * UUT
+        # Build covariance and sample directions
+        cov = (alpha / dim) * np.eye(dim) + ((1 - alpha) / max(n_samples, 1)) * UUT
         cov *= self.sigma
-        A = np.zeros((n_samples, len(x)))
 
+        A = np.zeros((n_samples, dim))
         try:
-            l = cholesky(cov, check_finite=False, overwrite_a=True)
-            for j in range(n_samples):
-                try:
-                    A[j] = np.zeros(len(x)) + l.dot(standard_normal(len(x)))
-
-                except LinAlgError:
-                    A[j] = np.random.randn(len(x))
-
+            L = cholesky(cov, check_finite=False, overwrite_a=True)
+            z = standard_normal((n_samples, dim))
+            A = z @ L.T  # equivalent to L @ z_i for each row
         except LinAlgError:
-            for j in range(n_samples):
-                A[j] = np.random.randn(len(x))
+            A = np.random.randn(n_samples, dim)
 
-        A /= np.linalg.norm(A, axis=-1)[:, np.newaxis]
+        # Normalize to unit row norms
+        norms = la.norm(A, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-12)
+        A /= norms
 
-        grad = np.zeros((len(x), ))
-        evaluations = []
-        for j in range(n_samples):
-            dire = A[j].reshape(x.shape)
-            dir_plus = x + self.sigma * dire
-            dir_minus = x - self.sigma * dire
+        # Evaluate all directions (vectorized outer loop)
+        points_plus = x + self.sigma * A   # (n_samples, dim)
+        points_minus = x - self.sigma * A  # (n_samples, dim)
 
-            evaluations_plus = f.evaluate(dir_plus)
-            evaluations_minus = f.evaluate(dir_minus)
+        evals_plus = np.array([f.evaluate(points_plus[j]) for j in range(n_samples)])
+        evals_minus = np.array([f.evaluate(points_minus[j]) for j in range(n_samples)])
 
-            evaluations.append(evaluations_plus)
-            evaluations.append(evaluations_minus)
+        diffs = evals_plus - evals_minus  # (n_samples,)
 
-            grad = grad + (evaluations_plus - evaluations_minus) * dire.reshape(grad.shape)
+        # FIX: divide by n_samples as well (thesis eq: 1/(2 n_t σ))
+        grad = diffs @ A / (2 * self.sigma * n_samples)
 
-        grad /= (2 * self.sigma)
-
-        if i >= self.k:
-            alpha = np.linalg.norm(np.dot(grad, UUT_ort)) / np.linalg.norm(np.dot(grad, UUT))
+        # Update alpha based on gradient projections
+        if i >= self.k and UUT.any() and UUT_ort.any():
+            norm_ort = la.norm(grad @ UUT_ort)
+            norm_act = la.norm(grad @ UUT)
+            if norm_act > 1e-12:
+                alpha = norm_ort / norm_act
+            else:
+                alpha = 1.0
 
         return grad, alpha
