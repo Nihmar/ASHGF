@@ -3,6 +3,7 @@ import math
 import numpy as np
 import numpy.linalg as la
 from scipy.stats import special_ortho_group
+from typing import Optional, Union, List, Tuple
 
 from functions import Function
 from optimizers.base import BaseOptimizer
@@ -43,14 +44,14 @@ class ASGF(BaseOptimizer):
         function: str,
         dim: int = 100,
         it: int = 1000,
-        x_init: np.ndarray = None,
+        x_init: Optional[Union[np.ndarray, List[float]]] = None,
         debug: bool = True,
         itprint: int = 25,
-    ):
+    ) -> Tuple[List, List]:
         np.random.seed(self.seed)
         f = Function(function)
 
-        x = np.random.randn(dim) if x_init is None else x_init.copy()
+        x = self._validate_x_init(x_init, dim)
 
         current_val = f.evaluate(x)
         best_value = current_val
