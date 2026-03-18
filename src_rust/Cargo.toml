@@ -11,9 +11,16 @@ nalgebra = "0.33"
 rand = "0.8"
 rand_distr = "0.4"
 rayon = { version = "1.10", optional = true }
+parquet = { version = "57", optional = true }
+arrow = { version = "57", optional = true }
+clap = { version = "4.5", features = ["derive"], optional = true }
+dirs = { version = "5", optional = true }
+anyhow = { version = "1", optional = true }
+plotters = { version = "0.3", optional = true }
 
 [features]
 parallel = ["rayon"]
+plotting = ["plotters", "parquet", "arrow", "clap", "dirs", "anyhow"]
 
 [dev-dependencies]
 approx = "0.5"
