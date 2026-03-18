@@ -2,7 +2,7 @@ use crate::optimizers::base::{Optimizer, OptimizerError, OptimizerPoint, Optimiz
 use nalgebra::{DMatrix, DVector};
 use rand::distributions::Distribution;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::SeedableRng;
 use rand_distr::{Binomial, StandardNormal};
 
 // ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ fn haar_orthogonal(dim: usize, rng: &mut StdRng) -> DMatrix<f64> {
 //   4. x = L * z, z ~ N(0, I)
 // ---------------------------------------------------------------------------
 fn multivariate_normal_sample(cov: &DMatrix<f64>, dim: usize, rng: &mut StdRng) -> Vec<f64> {
-    let eigen = cov.symmetric_eigen();
+    let eigen = cov.clone().symmetric_eigen();
 
     // L = V * diag(sqrt(max(λ,0)))
     let mut l = eigen.eigenvectors.clone(); // dim × dim, colonne = autovettori
@@ -186,6 +186,7 @@ fn compute_directions_sges(
 
         // Correggi autovalori negativi: cov -= lambda_min * I  se lambda_min < 0
         let min_ev = cov
+            .clone()
             .symmetric_eigen()
             .eigenvalues
             .iter()
@@ -248,7 +249,7 @@ fn compute_directions_sges(
 // Input: dirs_flat = Vec<f64> row-major (dim righe = direzioni normalizzate)
 // Output: DMatrix<f64> dim×dim con righe ortonormali (la base)
 // ---------------------------------------------------------------------------
-fn orthogonalize_directions(dirs_flat: &[f64], dim: usize, rng: &mut StdRng) -> DMatrix<f64> {
+fn orthogonalize_directions(dirs_flat: &[f64], dim: usize) -> DMatrix<f64> {
     let dirs = DMatrix::from_row_slice(dim, dim, dirs_flat);
 
     // QR su dirs^T: le colonne di Q sono la base ortonormale delle direzioni
@@ -330,7 +331,7 @@ impl ASHGF {
         pair_indices: &[(usize, usize)],
     ) -> (Vec<f64>, Vec<f64>, f64, Vec<f64>, f64, Vec<Vec<f64>>)
     where
-        F: Fn(&[f64]) -> f64,
+        F: Fn(&[f64]) -> f64 + Sync,
     {
         let m = nodes_std.len();
         let mid = m / 2;
@@ -449,7 +450,7 @@ impl ASHGF {
             // Campiona direzioni dalla covarianza dei gradienti storici
             let (dirs_flat, m) = compute_directions_sges(dim, g_history, alpha, rng);
             // Ortogonalizza via QR (equivalente a orth(dirs.T).T in Python)
-            let b = orthogonalize_directions(&dirs_flat, dim, rng);
+            let b = orthogonalize_directions(&dirs_flat, dim);
             (b, m)
         } else {
             // Warmup: base casuale secondo Haar
@@ -504,7 +505,7 @@ impl Optimizer for ASHGF {
         itprint: usize,
     ) -> Result<OptimizerResult, OptimizerError>
     where
-        F: Fn(&[f64]) -> f64 + Copy,
+        F: Fn(&[f64]) -> f64 + Copy + Sync,
     {
         let mut rng = StdRng::seed_from_u64(self.seed);
 
@@ -652,7 +653,7 @@ impl Optimizer for ASHGF {
             let historical = i >= self.t;
 
             // Adatta alpha (solo per i >= t+1, identico a Python)  [FIX 6]
-            if i >= self.t + 1 && m_dirs < dim {
+            if i > self.t && m_dirs < dim {
                 let vals_g: Vec<f64> = (0..m_dirs)
                     .map(|j| evaluations[j].iter().cloned().fold(f64::INFINITY, f64::min))
                     .collect();
@@ -787,7 +788,7 @@ mod tests {
         let flat: Vec<f64> = (0..dim * dim)
             .map(|_| StandardNormal.sample(&mut rng))
             .collect();
-        let basis = orthogonalize_directions(&flat, dim, &mut rng);
+        let basis = orthogonalize_directions(&flat, dim);
         let identity = DMatrix::<f64>::identity(dim, dim);
         let bbt = &basis * basis.transpose();
         let err = (&bbt - &identity).norm();

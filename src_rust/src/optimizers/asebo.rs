@@ -320,7 +320,7 @@ impl Optimizer for ASEBO {
         itprint: usize,
     ) -> Result<OptimizerResult, OptimizerError>
     where
-        F: Fn(&[f64]) -> f64 + Copy,
+        F: Fn(&[f64]) -> f64 + Copy + Sync,
     {
         // FIX 1: unico RNG condiviso da tutti i metodi che generano casualità
         let mut rng = StdRng::seed_from_u64(self.seed);

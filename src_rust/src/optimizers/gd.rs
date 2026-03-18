@@ -232,7 +232,7 @@ impl Optimizer for GD {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::functions::sphere;
+    // use crate::functions::sphere; // unused
 
     fn sphere_local(x: &[f64]) -> f64 {
         x.iter().map(|v| v * v).sum()

@@ -1,5 +1,5 @@
 use crate::optimizers::base::{Optimizer, OptimizerError, OptimizerPoint, OptimizerResult};
-use nalgebra::{DMatrix, DVector};
+use nalgebra::DMatrix;
 use rand::distributions::Distribution;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -180,7 +180,7 @@ impl ASGF {
         pair_indices: &[(usize, usize)],
     ) -> (Vec<f64>, Vec<f64>, f64, Vec<f64>, f64)
     where
-        F: Fn(&[f64]) -> f64,
+        F: Fn(&[f64]) -> f64 + Sync,
     {
         // Perturbazioni: σ * nodes_std
         let pert: Vec<f64> = nodes_std.iter().map(|n| sigma * n).collect();
@@ -362,7 +362,7 @@ impl Optimizer for ASGF {
         itprint: usize,
     ) -> Result<OptimizerResult, OptimizerError>
     where
-        F: Fn(&[f64]) -> f64 + Copy,
+        F: Fn(&[f64]) -> f64 + Copy + Sync,
     {
         let mut rng = StdRng::seed_from_u64(self.seed);
 

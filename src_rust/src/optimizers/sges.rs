@@ -356,7 +356,7 @@ impl Optimizer for SGES {
         itprint: usize,
     ) -> Result<OptimizerResult, OptimizerError>
     where
-        F: Fn(&[f64]) -> f64 + Copy,
+        F: Fn(&[f64]) -> f64 + Copy + Sync,
     {
         // Inizializza il punto di partenza
         let mut x: Vec<f64> = match x_init {
