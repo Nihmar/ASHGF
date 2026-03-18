@@ -9,7 +9,7 @@ use ashgf::plots::render::{
 
 #[derive(Parser, Debug)]
 #[command(name = "ashgf-plots")]
-#[command(about = "Generate convergence plots from Parquet results")]
+#[command(about = "Generate convergence plots from JSON results")]
 struct Args {
     #[arg(long, default_value_t = 100)]
     dim: u32,
@@ -34,13 +34,13 @@ fn main() -> Result<()> {
 
     if !results_path.exists() {
         anyhow::bail!(
-            "Results not found: {:?}\nRun profiles.py first to generate results.",
+            "Results not found: {:?}\nRun profiles first to generate results.",
             results_path
         );
     }
 
     println!("Loading results from {:?}...", results_path);
-    let data = ResultsData::from_parquet(&results_path)?;
+    let data = ResultsData::from_json(&results_path)?;
     println!("Loaded {} records for dim={}", data.results.len(), args.dim);
 
     let all_functions = data.get_functions();

@@ -35,6 +35,177 @@ The implementation was corrected against the thesis specifications:
 - Precomputed Gauss-Hermite nodes/weights and pair index set
 - Eliminated unnecessary dict storage of all steps
 
+## Project Structure
+
+```
+ASHGF/
+├── src/                    # Python implementation
+│   ├── optimizers/         # Algorithm implementations
+│   ├── functions/          # Benchmark functions
+│   ├── profiles.py         # Benchmark runner
+│   ├── stat_plots.py       # Plot generation
+│   └── testing_stuffs.py   # Quick tests
+├── src_rust/              # Rust implementation
+│   ├── src/
+│   │   ├── optimizers/     # Algorithm implementations
+│   │   ├── functions/      # Benchmark functions
+│   │   ├── profiles/       # Benchmark runner module
+│   │   ├── plots/          # Plot generation module
+│   │   ├── main.rs          # Quick demo
+│   │   └── bin/
+│   │       ├── profiles.rs  # Benchmark runner CLI
+│   │       └── plots.rs     # Plot generation CLI
+│   └── Cargo.toml
+├── results/               # Generated results (gitignored)
+└── requirements.txt       # Python dependencies
+```
+
+---
+
+# Rust Implementation
+
+## Installation
+
+```bash
+cd src_rust
+cargo build
+```
+
+### Features
+
+| Feature | Description | Default |
+|---------|-------------|---------|
+| `parallel` | Enable parallel evaluation in SGES using Rayon | off |
+| `plotting` | Enable plot generation with Plotters | off |
+
+### Build Examples
+
+```bash
+# Basic build (profiles only)
+cargo build
+
+# With plotting support
+cargo build --features plotting
+
+# With parallel support
+cargo build --features parallel
+
+# Both features
+cargo build --features "parallel,plotting"
+```
+
+---
+
+## Running Benchmarks
+
+```bash
+cargo run --bin profiles [OPTIONS]
+```
+
+### Arguments
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--dim` | Problem dimension | 100 |
+| `--iters` | Number of iterations | 10000 |
+| `--n-runs` | Number of runs per experiment | 10 |
+| `--seed` | Random seed | 0 |
+| `--overwrite` | Overwrite existing results | false |
+| `--functions` | Functions to run (space-separated) | 7 core functions |
+| `--algorithms` | Algorithms to run (space-separated) | all 5 algorithms |
+| `--analyze` | Analyze and print summary | false |
+| `--batch-size` | Batch size for saving results | 20 |
+
+### Available Functions
+
+Core functions (default):
+`sphere`, `ackley`, `levy`, `rastrigin`, `griewank`, `schwefel`, `zakharov`
+
+All 78 benchmark functions available. Use `Function::from_name()` for full list.
+
+### Usage Examples
+
+```bash
+# Run all experiments with default settings (dim=100, 10 runs)
+cargo run --bin profiles
+
+# Run with parallel support
+cargo run --bin profiles --features parallel
+
+# Run dimension 10 with 5 runs
+cargo run --bin profiles -- --dim 10 --n-runs 5
+
+# Run specific algorithms
+cargo run --bin profiles -- --dim 50 --algorithms GD ASGF ASHGF
+
+# Run specific functions
+cargo run --bin profiles -- --dim 100 --functions sphere levy rastrigin
+
+# Run specific algorithms and functions
+cargo run --bin profiles -- --dim 100 --functions sphere --algorithms ASGF ASHGF
+
+# Analyze existing results (no running, just print summary)
+cargo run --bin profiles -- --dim 100 --analyze
+
+# Run with custom parameters
+cargo run --bin profiles -- --dim 100 --iters 50000 --n-runs 20 --seed 42
+```
+
+Results are saved to `results/profiles/dim=<dim>/results.json`.
+
+---
+
+## Generating Plots
+
+```bash
+cargo run --features plotting --bin plots [OPTIONS]
+```
+
+### Arguments
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--dim` | Dimension to plot | 100 |
+| `--functions` | Functions to plot (space-separated) | all from data |
+| `--algorithms` | Algorithms to include (space-separated) | all from data |
+| `--plot-comparison` | Generate comparison plots | false |
+| `--summary` | Generate summary CSV table | false |
+
+### Usage Examples
+
+```bash
+# Generate all plots for dimension 100
+cargo run --features plotting --bin plots -- --dim 100
+
+# Generate comparison plots
+cargo run --features plotting --bin plots -- --dim 100 --plot-comparison
+
+# Generate comparison plots + summary CSV
+cargo run --features plotting --bin plots -- --dim 100 --plot-comparison --summary
+
+# Specific functions only
+cargo run --features plotting --bin plots -- --dim 100 --functions sphere rastrigin levy
+
+# Specific algorithms only
+cargo run --features plotting --bin plots -- --dim 100 --algorithms GD ASGF ASHGF
+```
+
+Plots are saved to `results/plots/dim=<dim>/<function>/`.
+
+---
+
+## Quick Demo
+
+```bash
+cargo run --bin ashgf
+```
+
+Runs all 5 algorithms on the sphere function (dim=10, 100 iterations) and prints results.
+
+---
+
+# Python Implementation
+
 ## Installation
 
 ```bash
@@ -93,6 +264,8 @@ python profiles.py --dims 10 --algorithms ASHGF --n-runs 10 --overwrite --worker
 
 Results are saved to `results/profiles/dim=<dim>/results.parquet`.
 
+---
+
 ## Generating Plots
 
 Generate convergence plots from results:
@@ -137,6 +310,8 @@ python stat_plots.py --dim 10 --functions sphere rastrigin ackley levy --plot-co
 
 Plots are saved to `results/plots/dim=<dim>/<function>/`.
 
+---
+
 ## Running Tests
 
 Quick test script:
@@ -153,26 +328,7 @@ cd src
 python RL_problems.py
 ```
 
-## Project Structure
-
-```
-src/
-├── optimizers/
-│   ├── base.py       # Base optimizer class
-│   ├── gd.py         # ES / GD implementation
-│   ├── sges.py       # SGES implementation
-│   ├── asebo.py      # ASEBO implementation
-│   ├── asgf.py       # ASGF implementation
-│   ├── ashgf.py      # ASHGF implementation
-│   └── analysis.md  # Detailed bug analysis
-├── functions/
-│   ├── benchmarks.py # Benchmark function definitions
-│   └── __init__.py   # Function wrapper class
-├── profiles.py       # Benchmark runner
-├── stat_plots.py     # Plot generation
-├── RL_problems.py    # RL experiments
-└── testing_stuffs.py # Quick tests
-```
+---
 
 ## Benchmark Functions
 

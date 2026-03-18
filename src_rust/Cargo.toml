@@ -13,14 +13,16 @@ rand_distr = "0.4"
 rayon = { version = "1.10", optional = true }
 parquet = { version = "57", optional = true }
 arrow = { version = "57", optional = true }
-clap = { version = "4.5", features = ["derive"], optional = true }
+clap = { version = "4.5", features = ["derive"] }
 dirs = { version = "5", optional = true }
-anyhow = { version = "1", optional = true }
+anyhow = "1"
 plotters = { version = "0.3", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [features]
 parallel = ["rayon"]
-plotting = ["plotters", "parquet", "arrow", "clap", "dirs", "anyhow"]
+plotting = ["plotters", "parquet", "arrow", "dirs"]
 
 [dev-dependencies]
 approx = "0.5"
@@ -34,6 +36,10 @@ harness = false
 [lib]
 name = "ashgf"
 path = "src/lib.rs"
+
+[[bin]]
+name = "profiles"
+path = "src/bin/profiles.rs"
 
 [[bin]]
 name = "plots"
