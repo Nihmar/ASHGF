@@ -5,6 +5,9 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rand_distr::{Binomial, StandardNormal};
 
+// Type alias for complex return type
+type GradEstimatorResult = (Vec<f64>, Vec<f64>, f64, Vec<f64>, f64, Vec<Vec<f64>>);
+
 // ---------------------------------------------------------------------------
 // Struct
 // ---------------------------------------------------------------------------
@@ -329,7 +332,7 @@ impl ASHGF {
         nodes_std: &[f64],
         weights_std: &[f64],
         pair_indices: &[(usize, usize)],
-    ) -> (Vec<f64>, Vec<f64>, f64, Vec<f64>, f64, Vec<Vec<f64>>)
+    ) -> GradEstimatorResult
     where
         F: Fn(&[f64]) -> f64 + Sync,
     {
