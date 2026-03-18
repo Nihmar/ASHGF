@@ -68,15 +68,26 @@ ASHGF/
 
 ```bash
 cd src_rust
-cargo build
+cargo build --release
 ```
+
+> Note: Rayon is used for parallel execution. The number of threads is automatically set to the CPU core count.
 
 ### Features
 
 | Feature | Description | Default |
 |---------|-------------|---------|
-| `parallel` | Enable parallel evaluation in SGES using Rayon | off |
 | `plotting` | Enable plot generation with Plotters | off |
+
+### Build Examples
+
+```bash
+# Basic build (profiles with parallel execution)
+cargo build --release
+
+# With plotting support
+cargo build --release --features plotting
+```
 
 ### Build Examples
 

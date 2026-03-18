@@ -4,7 +4,10 @@ use rand::distributions::Distribution;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rand_distr::StandardNormal;
+use rayon::prelude::*;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use crate::profiles::io::{load_results, save_results, RunResult};
 
@@ -126,19 +129,18 @@ impl Runner {
     ) -> anyhow::Result<Vec<RunResult>> {
         let mut all_results = load_results(self.dim as u32).unwrap_or_default();
 
-        let mut pending: Vec<RunResult> = Vec::new();
-        let mut completed = 0;
-        let mut skipped = 0;
-        let mut failed = 0;
-
-        let total_tasks = functions.len() * algorithms.len() * self.n_runs;
+        let num_threads = rayon::current_num_threads();
 
         if verbose {
             println!(
-                "Running {} experiments for dim={}...",
-                total_tasks, self.dim
+                "Running {} experiments for dim={} with {} thread(s)...",
+                functions.len() * algorithms.len() * self.n_runs,
+                self.dim,
+                num_threads
             );
         }
+
+        let mut tasks: Vec<(Function, Algorithm, i32, u64)> = Vec::new();
 
         for func in functions {
             let func_name = func.name();
@@ -153,57 +155,49 @@ impl Runner {
                 for run_idx in 0..self.n_runs {
                     let run_id = run_idx as i32;
                     if !overwrite && existing_runs.contains(&run_id) {
-                        skipped += 1;
                         continue;
                     }
 
                     let task_seed = self.seed.wrapping_add((func_name.len() + run_idx) as u64);
-
-                    let result =
-                        run_single_experiment(*func, *alg, self.dim, self.iters, run_id, task_seed);
-
-                    match result.status.as_str() {
-                        "success" => {
-                            pending.push(result.to_run_result());
-                            if verbose {
-                                println!("[{}] {} run {}: OK", alg.name(), func_name, run_id);
-                            }
-                        }
-                        _ => {
-                            failed += 1;
-                            if verbose {
-                                println!(
-                                    "[{}] {} run {}: FAILED - {}",
-                                    alg.name(),
-                                    func_name,
-                                    run_id,
-                                    result.error_msg.as_deref().unwrap_or("unknown")
-                                );
-                            }
-                        }
-                    }
-
-                    completed += 1;
-
-                    if pending.len() >= self.batch_size {
-                        all_results.append(&mut pending);
-                        save_results(&all_results, self.dim as u32)?;
-                    }
-
-                    if verbose && completed % 100 == 0 {
-                        println!("Progress: {}/{}", completed, total_tasks);
-                    }
+                    tasks.push((*func, *alg, run_id, task_seed));
                 }
             }
         }
 
+        let total_tasks = tasks.len();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let failed_count = Arc::new(AtomicUsize::new(0));
+
+        let results: Vec<ExperimentResult> = tasks
+            .par_iter()
+            .map(|(func, alg, run_id, seed)| {
+                let result =
+                    run_single_experiment(*func, *alg, self.dim, self.iters, *run_id, *seed);
+
+                let completed_now = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                if verbose && completed_now % 50 == 0 {
+                    println!("Progress: {}/{}", completed_now, total_tasks);
+                }
+
+                if result.status != "success" {
+                    failed_count.fetch_add(1, Ordering::Relaxed);
+                }
+
+                result
+            })
+            .collect();
+
+        let mut pending: Vec<RunResult> = results.into_iter().map(|r| r.to_run_result()).collect();
         all_results.append(&mut pending);
+
         save_results(&all_results, self.dim as u32)?;
 
         if verbose {
+            let failed = failed_count.load(Ordering::Relaxed);
+            let skipped = functions.len() * algorithms.len() * self.n_runs - total_tasks;
             println!(
                 "Completed: {} success, {} failed, {} skipped",
-                completed - failed - skipped,
+                total_tasks - failed,
                 failed,
                 skipped
             );

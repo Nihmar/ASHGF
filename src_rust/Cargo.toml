@@ -10,7 +10,7 @@ ndarray = "0.17"
 nalgebra = "0.33"
 rand = "0.8"
 rand_distr = "0.4"
-rayon = { version = "1.10", optional = true }
+rayon = "1.10"
 parquet = { version = "57" }
 arrow = { version = "57" }
 clap = { version = "4.5", features = ["derive"] }
@@ -21,7 +21,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [features]
-parallel = ["rayon"]
 plotting = ["plotters", "dirs"]
 
 [dev-dependencies]
