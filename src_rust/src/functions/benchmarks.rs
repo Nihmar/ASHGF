@@ -344,10 +344,11 @@ pub fn extended_penalty(x: &[f64]) -> f64 {
     let mut s1 = 0.0;
     let mut sq = 0.0;
     let n = x.len();
-    for i in 0..n - 1 {
-        let d = x[i] - 1.0;
+    for xi in x.iter().take(n - 1) {
+        let xi_val = *xi;
+        let d = xi_val - 1.0;
         s1 += d * d;
-        sq += x[i] * x[i];
+        sq += xi_val * xi_val;
     }
     sq += x[n - 1] * x[n - 1];
     s1 + (sq - 0.25).powi(2)
@@ -518,10 +519,11 @@ pub fn extended_quadratic_penalty_qp1(x: &[f64]) -> f64 {
     let mut s1 = 0.0;
     let mut sq = 0.0;
     let n = x.len();
-    for i in 0..n - 1 {
-        let d = x[i] * x[i] - 2.0;
+    for xi in x.iter().take(n - 1) {
+        let xi_val = *xi;
+        let d = xi_val * xi_val - 2.0;
         s1 += d * d;
-        sq += x[i] * x[i];
+        sq += xi_val * xi_val;
     }
     sq += x[n - 1] * x[n - 1];
     s1 + (sq - 0.5).powi(2)
@@ -532,11 +534,11 @@ pub fn extended_quadratic_penalty_qp2(x: &[f64]) -> f64 {
     let mut s1 = 0.0;
     let mut sq = 0.0;
     let n = x.len();
-    for i in 0..n - 1 {
-        let xi = x[i];
-        let d = xi * xi - xi.sin();
+    for xi in x.iter().take(n - 1) {
+        let xi_val = *xi;
+        let d = xi_val * xi_val - xi_val.sin();
         s1 += d * d;
-        sq += xi * xi;
+        sq += xi_val * xi_val;
     }
     sq += x[n - 1] * x[n - 1];
     s1 + (sq - 100.0).powi(2)
@@ -592,9 +594,10 @@ pub fn arwhead(x: &[f64]) -> f64 {
     let mut s1 = 0.0;
     let mut s2 = 0.0;
     let x_last_sq = x[n - 1] * x[n - 1];
-    for i in 0..n - 1 {
-        s1 += -4.0 * x[i] + 3.0;
-        let d = x[i] * x[i] + x_last_sq;
+    for xi in x.iter().take(n - 1) {
+        let xi_val = *xi;
+        s1 += -4.0 * xi_val + 3.0;
+        let d = xi_val * xi_val + x_last_sq;
         s2 += d * d;
     }
     s1 + s2
@@ -917,8 +920,8 @@ pub fn levy(x: &[f64]) -> f64 {
 
     let w0 = w(x[0]);
     let mut s = (pi * w0).sin().powi(2);
-    for i in 0..n - 1 {
-        let wi = w(x[i]);
+    for xi in x.iter().take(n - 1) {
+        let wi = w(*xi);
         s += (wi - 1.0).powi(2) * (1.0 + 10.0 * (pi * wi + 1.0).sin().powi(2));
     }
     let wd = w(x[n - 1]);
@@ -999,8 +1002,8 @@ pub fn eg2(x: &[f64]) -> f64 {
     let x0 = x[0];
     let mut s = 0.0;
     let n = x.len();
-    for i in 0..n - 1 {
-        s += (x0 + x[i] * x[i] - 1.0).sin();
+    for xi in x.iter().take(n - 1) {
+        s += (x0 + xi * xi - 1.0).sin();
     }
     s += 0.5 * (x[n - 1] * x[n - 1]).sin();
     s
@@ -1016,8 +1019,8 @@ pub fn indef(x: &[f64]) -> f64 {
     let x0 = x[0];
     let xn = x[n - 1];
     let mut t = 0.0;
-    for i in 1..n - 1 {
-        t += (2.0 * x[i] - xn - x0).cos();
+    for xi in x.iter().skip(1).take(n - 2) {
+        t += (2.0 * xi - xn - x0).cos();
     }
     s + 0.5 * t
 }
@@ -1065,6 +1068,7 @@ pub fn fletcbv3(x: &[f64]) -> f64 {
 }
 
 #[inline]
+#[allow(clippy::needless_range_loop)]
 pub fn bdqrtic(x: &[f64]) -> f64 {
     let n = x.len();
     let mut term_1 = 0.0;
@@ -1154,6 +1158,7 @@ pub trait BenchmarkFunction: Fn(&[f64]) -> f64 + Copy {
     fn name(&self) -> &'static str;
 }
 
+#[allow(dead_code)]
 pub struct FunctionWrapper {
     func: fn(&[f64]) -> f64,
     name: &'static str,

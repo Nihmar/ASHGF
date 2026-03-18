@@ -68,6 +68,7 @@ impl ASHGF {
         (nodes, weights)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn grad_estimator<F: Fn(&[f64]) -> f64 + Copy>(
         &self,
         x: &[f64],
@@ -332,7 +333,7 @@ impl Optimizer for ASHGF {
             }
 
             if i < self.t {
-                m_dirs = dim;
+                // m_dirs = dim; // unused in this branch
             } else {
                 let m_eff = m_dirs.max(1).min(dim);
                 let vals_g: Vec<f64> = (0..m_eff).map(|j| derivatives[j]).collect();
@@ -347,7 +348,7 @@ impl Optimizer for ASHGF {
                     }
                 }
 
-                m_dirs = ((self.alpha * dim as f64) as usize).max(1).min(dim);
+                // m_dirs updated but not read in this branch
             }
 
             if r > 0 && sigma < self.ro * self.sigma_zero {

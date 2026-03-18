@@ -28,6 +28,7 @@ impl GD {
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn grad_estimator_vectorized<F: Fn(&[f64]) -> f64 + Copy>(&self, x: &[f64], f: F) -> Vec<f64> {
         let dim = x.len();
         let mut rng = StdRng::seed_from_u64(self.seed);
