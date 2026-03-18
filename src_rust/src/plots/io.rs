@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::Context;
+use arrow::array::{Int32Array, StringArray};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -22,10 +23,52 @@ pub struct ResultsData {
 }
 
 impl ResultsData {
-    pub fn from_json(path: &Path) -> Result<Self> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let results: Vec<RunResult> = serde_json::from_reader(reader)?;
+    pub fn from_parquet(path: &Path) -> anyhow::Result<Self> {
+        let file = File::open(path).context("Failed to open parquet file")?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .context("Failed to create parquet reader")?
+            .build()
+            .context("Failed to build record batch reader")?;
+
+        let mut results = Vec::new();
+
+        for batch_result in reader {
+            let batch = batch_result.context("Failed to read batch")?;
+            let num_rows = batch.num_rows();
+
+            let function_col = batch
+                .column_by_name("function")
+                .context("Missing 'function' column")?;
+            let algorithm_col = batch
+                .column_by_name("algorithm")
+                .context("Missing 'algorithm' column")?;
+            let run_col = batch
+                .column_by_name("run")
+                .context("Missing 'run' column")?;
+            let values_col = batch
+                .column_by_name("values")
+                .context("Missing 'values' column")?;
+            let warnings_col = batch.column_by_name("warnings");
+
+            for i in 0..num_rows {
+                let function = extract_string(function_col.as_ref(), i)?;
+                let algorithm = extract_string(algorithm_col.as_ref(), i)?;
+                let run = extract_int(run_col.as_ref(), i)?;
+                let values = extract_values(values_col.as_ref(), i)?;
+                let warnings = warnings_col
+                    .as_ref()
+                    .and_then(|col| extract_optional_string(col.as_ref(), i));
+
+                results.push(RunResult {
+                    function,
+                    algorithm,
+                    run,
+                    values,
+                    warnings,
+                });
+            }
+        }
+
         Ok(Self { results })
     }
 
@@ -34,8 +77,8 @@ impl ResultsData {
             .results
             .iter()
             .filter(|r| {
-                let func_ok = functions.map_or(true, |f| f.contains(&r.function));
-                let alg_ok = algorithms.map_or(true, |a| a.contains(&r.algorithm));
+                let func_ok = functions.is_none_or(|f| f.contains(&r.function));
+                let alg_ok = algorithms.is_none_or(|a| a.contains(&r.algorithm));
                 func_ok && alg_ok
             })
             .cloned()
@@ -78,5 +121,41 @@ pub fn get_results_path(dim: u32) -> std::path::PathBuf {
         .join("results")
         .join("profiles")
         .join(format!("dim={}", dim))
-        .join("results.json")
+        .join("results.parquet")
+}
+
+fn extract_string(col: &dyn arrow::array::Array, idx: usize) -> anyhow::Result<String> {
+    let string_arr = col
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .context("Expected StringArray")?;
+    Ok(string_arr.value(idx).to_string())
+}
+
+fn extract_int(col: &dyn arrow::array::Array, idx: usize) -> anyhow::Result<i32> {
+    if let Some(int_arr) = col.as_any().downcast_ref::<Int32Array>() {
+        Ok(int_arr.value(idx))
+    } else {
+        anyhow::bail!("Expected Int32Array")
+    }
+}
+
+fn extract_values(col: &dyn arrow::array::Array, idx: usize) -> anyhow::Result<Vec<f64>> {
+    let string_arr = col
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .context("Expected StringArray for values")?;
+
+    let json_str = string_arr.value(idx);
+    let values: Vec<f64> = serde_json::from_str(json_str).context("Failed to parse values JSON")?;
+
+    Ok(values)
+}
+
+fn extract_optional_string(col: &dyn arrow::array::Array, idx: usize) -> Option<String> {
+    if col.is_null(idx) {
+        return None;
+    }
+    let string_arr = col.as_any().downcast_ref::<StringArray>()?;
+    Some(string_arr.value(idx).to_string())
 }

@@ -9,7 +9,7 @@ use ashgf::plots::render::{
 
 #[derive(Parser, Debug)]
 #[command(name = "ashgf-plots")]
-#[command(about = "Generate convergence plots from JSON results")]
+#[command(about = "Generate convergence plots from Parquet results")]
 struct Args {
     #[arg(long, default_value_t = 100)]
     dim: u32,
@@ -40,7 +40,7 @@ fn main() -> Result<()> {
     }
 
     println!("Loading results from {:?}...", results_path);
-    let data = ResultsData::from_json(&results_path)?;
+    let data = ResultsData::from_parquet(&results_path)?;
     println!("Loaded {} records for dim={}", data.results.len(), args.dim);
 
     let all_functions = data.get_functions();

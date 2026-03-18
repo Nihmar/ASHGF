@@ -111,15 +111,12 @@ cargo run --bin profiles [OPTIONS]
 | `--n-runs` | Number of runs per experiment | 10 |
 | `--seed` | Random seed | 0 |
 | `--overwrite` | Overwrite existing results | false |
-| `--functions` | Functions to run (space-separated) | 7 core functions |
-| `--algorithms` | Algorithms to run (space-separated) | all 5 algorithms |
-| `--analyze` | Analyze and print summary | false |
-| `--batch-size` | Batch size for saving results | 20 |
+| `--functions` | Functions to run (space-separated) | 26 functions (see below) |
 
-### Available Functions
+### Default Functions (26)
 
-Core functions (default):
-`sphere`, `ackley`, `levy`, `rastrigin`, `griewank`, `schwefel`, `zakharov`
+Core benchmark functions marked with `**` in `functions.txt`:
+`extended_feudenstein_and_roth`, `extended_trigonometric`, `extended_rosenbrock`, `generalized_rosenbrock`, `extended_white_and_holst`, `perturbed_quadratic`, `extended_tridiagonal_1`, `extended_himmelblau`, `generalized_white_and_holst`, `extended_psc1`, `perturbed_quadratic_diagonal`, `extended_hiebert`, `extended_tridiagonal_2`, `almost_perturbed_quadratic`, `power`, `cube`, `generalized_quartic`, `ackley`, `griewank`, `levy`, `rastrigin`, `schwefel`, `sphere`, `sum_of_different_powers`, `trid`, `zakharov`
 
 All 78 benchmark functions available. Use `Function::from_name()` for full list.
 
@@ -127,38 +124,38 @@ All 78 benchmark functions available. Use `Function::from_name()` for full list.
 
 ```bash
 # Run all experiments with default settings (dim=100, 10 runs)
-cargo run --bin profiles
+cargo run --release --bin profiles
 
 # Run with parallel support
-cargo run --bin profiles --features parallel
+cargo run --release --bin profiles --features parallel
 
 # Run dimension 10 with 5 runs
-cargo run --bin profiles -- --dim 10 --n-runs 5
+cargo run --release --bin profiles -- --dim 10 --n-runs 5
 
 # Run specific algorithms
-cargo run --bin profiles -- --dim 50 --algorithms GD ASGF ASHGF
+cargo run --release --bin profiles -- --dim 50 --algorithms GD ASGF ASHGF
 
 # Run specific functions
-cargo run --bin profiles -- --dim 100 --functions sphere levy rastrigin
+cargo run --release --bin profiles -- --dim 100 --functions sphere levy rastrigin
 
 # Run specific algorithms and functions
-cargo run --bin profiles -- --dim 100 --functions sphere --algorithms ASGF ASHGF
+cargo run --release --bin profiles -- --dim 100 --functions sphere --algorithms ASGF ASHGF
 
 # Analyze existing results (no running, just print summary)
-cargo run --bin profiles -- --dim 100 --analyze
+cargo run --release --bin profiles -- --dim 100 --analyze
 
 # Run with custom parameters
-cargo run --bin profiles -- --dim 100 --iters 50000 --n-runs 20 --seed 42
+cargo run --release --bin profiles -- --dim 100 --iters 50000 --n-runs 20 --seed 42
 ```
 
-Results are saved to `results/profiles/dim=<dim>/results.json`.
+Results are saved to `results/profiles/dim=<dim>/results.parquet`.
 
 ---
 
 ## Generating Plots
 
 ```bash
-cargo run --features plotting --bin plots [OPTIONS]
+cargo run --release --features plotting --bin plots [OPTIONS]
 ```
 
 ### Arguments
@@ -175,19 +172,19 @@ cargo run --features plotting --bin plots [OPTIONS]
 
 ```bash
 # Generate all plots for dimension 100
-cargo run --features plotting --bin plots -- --dim 100
+cargo run --release --features plotting --bin plots -- --dim 100
 
 # Generate comparison plots
-cargo run --features plotting --bin plots -- --dim 100 --plot-comparison
+cargo run --release --features plotting --bin plots -- --dim 100 --plot-comparison
 
 # Generate comparison plots + summary CSV
-cargo run --features plotting --bin plots -- --dim 100 --plot-comparison --summary
+cargo run --release --features plotting --bin plots -- --dim 100 --plot-comparison --summary
 
 # Specific functions only
-cargo run --features plotting --bin plots -- --dim 100 --functions sphere rastrigin levy
+cargo run --release --features plotting --bin plots -- --dim 100 --functions sphere rastrigin levy
 
 # Specific algorithms only
-cargo run --features plotting --bin plots -- --dim 100 --algorithms GD ASGF ASHGF
+cargo run --release --features plotting --bin plots -- --dim 100 --algorithms GD ASGF ASHGF
 ```
 
 Plots are saved to `results/plots/dim=<dim>/<function>/`.

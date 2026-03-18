@@ -323,12 +323,31 @@ fn run_single_experiment(
 
 pub fn get_default_functions() -> Vec<Function> {
     vec![
-        Function::Sphere,
+        Function::ExtendedFeudensteinAndRoth,
+        Function::ExtendedTrigonometric,
+        Function::ExtendedRosenbrock,
+        Function::GeneralizedRosenbrock,
+        Function::ExtendedWhiteAndHolst,
+        Function::PerturbedQuadratic,
+        Function::ExtendedTridiagonal1,
+        Function::ExtendedHimmelblau,
+        Function::GeneralizedWhiteAndHolst,
+        Function::ExtendedPsc1,
+        Function::PerturbedQuadraticDiagonal,
+        Function::ExtendedHiebert,
+        Function::ExtendedTridiagonal2,
+        Function::AlmostPerturbedQuadratic,
+        Function::Power,
+        Function::Cube,
+        Function::GeneralizedQuartic,
         Function::Ackley,
+        Function::Griewank,
         Function::Levy,
         Function::Rastrigin,
-        Function::Griewank,
         Function::Schwefel,
+        Function::Sphere,
+        Function::SumOfDifferentPowers,
+        Function::Trid,
         Function::Zakharov,
     ]
 }

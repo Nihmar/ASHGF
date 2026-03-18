@@ -94,7 +94,7 @@ fn main() -> Result<()> {
     runner.run(&funcs, &algos, args.overwrite, true)?;
 
     println!(
-        "\nResults saved to results/profiles/dim={}/results.json",
+        "\nResults saved to results/profiles/dim={}/results.parquet",
         args.dim
     );
 
