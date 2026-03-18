@@ -147,9 +147,13 @@ fn extract_values(col: &dyn arrow::array::Array, idx: usize) -> anyhow::Result<V
         .context("Expected StringArray for values")?;
 
     let json_str = string_arr.value(idx);
-    let values: Vec<f64> = serde_json::from_str(json_str).context("Failed to parse values JSON")?;
+    let values: Vec<Option<f64>> =
+        serde_json::from_str(json_str).context("Failed to parse values JSON")?;
 
-    Ok(values)
+    Ok(values
+        .into_iter()
+        .map(|v| v.unwrap_or(f64::INFINITY))
+        .collect())
 }
 
 fn extract_optional_string(col: &dyn arrow::array::Array, idx: usize) -> Option<String> {

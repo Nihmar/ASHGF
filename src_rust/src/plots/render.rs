@@ -70,13 +70,17 @@ pub fn plot_convergence_with_stats(
         .filter(|&&v| v.is_finite())
         .cloned()
         .fold(f64::NEG_INFINITY, f64::max);
-    let y_min = if min_val.is_finite() {
-        min_val * 0.1
+
+    let y_margin = (max_val - min_val) * 0.05;
+    let y_min = if min_val.is_finite() && min_val > 0.0 {
+        (min_val - y_margin).max(min_val * 0.1)
+    } else if min_val.is_finite() {
+        min_val - y_margin
     } else {
         1e-10
     };
     let y_max = if max_val.is_finite() {
-        max_val * 10.0
+        max_val + y_margin
     } else {
         1e10
     };
@@ -204,13 +208,16 @@ pub fn plot_all_algorithms(results: &ResultsData, function: &str, output_dir: &P
         }
     }
 
-    let y_min = if min_val.is_finite() {
-        min_val * 0.1
+    let y_margin = (max_val - min_val) * 0.05;
+    let y_min = if min_val.is_finite() && min_val > 0.0 {
+        (min_val - y_margin).max(min_val * 0.1)
+    } else if min_val.is_finite() {
+        min_val - y_margin
     } else {
         1e-10
     };
     let y_max = if max_val.is_finite() {
-        max_val * 10.0
+        max_val + y_margin
     } else {
         1e10
     };
