@@ -52,6 +52,7 @@ pub enum Function {
     Sine,
     Biggsb1,
     GeneralizedQuartic,
+    Diagonal5,
     Diagonal7,
     Diagonal8,
     Fh3,
@@ -134,6 +135,7 @@ impl Function {
             Function::Sine => sine(x),
             Function::Biggsb1 => biggsb1(x),
             Function::GeneralizedQuartic => generalized_quartic(x),
+            Function::Diagonal5 => diagonal_5(x),
             Function::Diagonal7 => diagonal_7(x),
             Function::Diagonal8 => diagonal_8(x),
             Function::Fh3 => fh3(x),
@@ -217,6 +219,7 @@ impl Function {
             Function::Sine => "sine",
             Function::Biggsb1 => "biggsb1",
             Function::GeneralizedQuartic => "generalized_quartic",
+            Function::Diagonal5 => "diagonal_5",
             Function::Diagonal7 => "diagonal_7",
             Function::Diagonal8 => "diagonal_8",
             Function::Fh3 => "fh3",
@@ -821,6 +824,15 @@ pub fn generalized_quartic(x: &[f64]) -> f64 {
 }
 
 #[inline]
+pub fn diagonal_5(x: &[f64]) -> f64 {
+    let mut s = 0.0;
+    for xi in x {
+        s += (xi.exp() + (-xi).exp()).ln();
+    }
+    s
+}
+
+#[inline]
 pub fn diagonal_7(x: &[f64]) -> f64 {
     let mut s = 0.0;
     for xi in x {
@@ -855,8 +867,8 @@ pub fn fh3(x: &[f64]) -> f64 {
 #[inline]
 pub fn diagonal_9(x: &[f64]) -> f64 {
     let mut s = 0.0;
-    for xi in x {
-        s += xi.exp() - xi;
+    for (i, xi) in x.iter().enumerate() {
+        s += xi.exp() - (i as f64 + 1.0) * xi;
     }
     s + 10000.0 * x[x.len() - 1] * x[x.len() - 1]
 }

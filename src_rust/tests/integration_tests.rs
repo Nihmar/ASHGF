@@ -81,10 +81,10 @@ mod optimizers {
     #[test]
     fn test_gd_improves_on_sphere() {
         let mut gd = GD::new();
-        let (best_values, all_values) = gd.optimize(sphere, 10, 100, None, false, 25);
+        let result = gd.optimize(sphere, 10, 100, None, false, 25).unwrap();
 
-        let initial = all_values[0];
-        let final_best = best_values.last().unwrap()[1];
+        let initial = result.all_values[0];
+        let final_best = result.best_value();
 
         assert!(
             final_best < initial,
@@ -98,10 +98,12 @@ mod optimizers {
     fn test_gd_improves_on_rastrigin() {
         let mut gd = GD::new();
         let x_init = vec![3.0; 10];
-        let (best_values, all_values) = gd.optimize(rastrigin, 10, 100, Some(&x_init), false, 25);
+        let result = gd
+            .optimize(rastrigin, 10, 100, Some(&x_init), false, 25)
+            .unwrap();
 
-        let initial = all_values[0];
-        let final_best = best_values.last().unwrap()[1];
+        let initial = result.all_values[0];
+        let final_best = result.best_value();
 
         assert!(final_best < initial, "GD should improve on rastrigin");
     }
@@ -109,10 +111,10 @@ mod optimizers {
     #[test]
     fn test_ashgf_improves_on_sphere() {
         let mut ashgf = ASHGF::new();
-        let (best_values, all_values) = ashgf.optimize(sphere, 10, 100, None, false, 25);
+        let result = ashgf.optimize(sphere, 10, 100, None, false, 25).unwrap();
 
-        let initial = all_values[0];
-        let final_best = best_values.last().unwrap()[1];
+        let initial = result.all_values[0];
+        let final_best = result.best_value();
 
         assert!(
             final_best < initial,
@@ -124,11 +126,12 @@ mod optimizers {
     fn test_ashgf_improves_on_rastrigin() {
         let mut ashgf = ASHGF::new();
         let x_init = vec![3.0; 10];
-        let (best_values, all_values) =
-            ashgf.optimize(rastrigin, 10, 100, Some(&x_init), false, 25);
+        let result = ashgf
+            .optimize(rastrigin, 10, 100, Some(&x_init), false, 25)
+            .unwrap();
 
-        let initial = all_values[0];
-        let final_best = best_values.last().unwrap()[1];
+        let initial = result.all_values[0];
+        let final_best = result.best_value();
 
         assert!(final_best < initial, "ASHGF should improve on rastrigin");
     }
@@ -138,10 +141,10 @@ mod optimizers {
         let mut ashgf = ASHGF::new();
         ashgf.eps = 1e-15;
 
-        let (_best_values, all_values) = ashgf.optimize(sphere, 5, 10000, None, false, 1000);
+        let result = ashgf.optimize(sphere, 5, 10000, None, false, 1000).unwrap();
 
         assert!(
-            all_values.len() < 10000,
+            result.all_values.len() < 10000,
             "ASHGF should terminate early due to epsilon"
         );
     }

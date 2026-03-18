@@ -5,12 +5,7 @@ use rand::prelude::*;
 use rand::rngs::StdRng;
 use rand_distr::StandardNormal;
 
-pub struct ASHGF {
-    pub k1: f64,
-    pub k2: f64,
-    pub alpha: f64,
-    pub delta: f64,
-    pub t: usize,
+pub struct ASGF {
     seed: u64,
     pub eps: f64,
     m: usize,
@@ -21,21 +16,15 @@ pub struct ASHGF {
     b_minus: f64,
     b_plus: f64,
     gamma_l: f64,
-    gamma_sigma_plus: f64,
-    gamma_sigma_minus: f64,
+    gamma_sigma: f64,
     r: usize,
     ro: f64,
     sigma_zero: f64,
 }
 
-impl ASHGF {
+impl ASGF {
     pub fn new() -> Self {
         Self {
-            k1: 0.9,
-            k2: 0.1,
-            alpha: 0.5,
-            delta: 1.1,
-            t: 50,
             seed: 2003,
             eps: 1e-8,
             m: 5,
@@ -46,9 +35,8 @@ impl ASHGF {
             b_minus: 0.98,
             b_plus: 1.01,
             gamma_l: 0.9,
-            gamma_sigma_plus: 1.0 / 0.9,
-            gamma_sigma_minus: 0.9,
-            r: 10,
+            gamma_sigma: 0.9,
+            r: 2,
             ro: 0.01,
             sigma_zero: 0.01,
         }
@@ -81,9 +69,8 @@ impl ASHGF {
         basis: &DMatrix<f64>,
         f: F,
         l_nabla: f64,
-        m_dirs: usize,
         value: f64,
-    ) -> (Vec<f64>, Vec<f64>, f64, Vec<f64>, f64, Vec<Vec<f64>>) {
+    ) -> (Vec<f64>, Vec<f64>, f64, Vec<f64>, f64) {
         let (nodes_raw, weights_raw) = Self::hermite_nodes_weights(m);
 
         let nodes: Vec<f64> = nodes_raw.iter().map(|n| n * (2.0_f64).sqrt()).collect();
@@ -149,28 +136,19 @@ impl ASHGF {
             new_lipschitz[j] = lip;
         }
 
-        let m_eff = m_dirs.max(1).min(dim);
-        let l_g = new_lipschitz[..m_eff]
-            .iter()
-            .cloned()
-            .fold(0.0_f64, f64::max);
         // Ensure Lipschitz constant is not too small
+        // Use a reasonable minimum value based on the expected Lipschitz constant
+        // For sphere function, Lipschitz constant ≈ 2 * ||x||
         for lip in new_lipschitz.iter_mut() {
             *lip = lip.max(1.0);
         }
 
-        let l_nabla_new = (1.0 - self.gamma_l) * l_g + self.gamma_l * l_nabla;
+        let l_nabla_new = (1.0 - self.gamma_l) * new_lipschitz[0] + self.gamma_l * l_nabla;
         // Limit learning rate to prevent oscillation
+        // For sphere function, optimal lr < 0.5 to avoid overshooting
         let lr = (sigma / l_nabla_new.max(1e-12)).min(0.4);
 
-        (
-            grad,
-            new_lipschitz,
-            lr,
-            derivatives,
-            l_nabla_new,
-            evaluations,
-        )
+        (grad, new_lipschitz, lr, derivatives, l_nabla_new)
     }
 
     fn generate_random_orthogonal(&self, dim: usize, rng: &mut StdRng) -> DMatrix<f64> {
@@ -200,79 +178,96 @@ impl ASHGF {
         }
     }
 
-    fn compute_directions_sges(
+    #[allow(clippy::too_many_arguments)]
+    fn subroutine(
         &self,
-        dim: usize,
-        g_history: &[Vec<f64>],
-        alpha: f64,
+        sigma: f64,
+        grad: &[f64],
+        derivatives: &[f64],
+        lipschitz_coefficients: &[f64],
+        mut a: f64,
+        mut b: f64,
+        mut r: usize,
         rng: &mut StdRng,
-    ) -> (DMatrix<f64>, usize) {
-        // If we have enough history, compute covariance matrix
-        let mut dirs = Vec::new();
-        let m_dirs = if g_history.len() >= 2 {
-            // Number of directions from the gradient subspace
-            let m = ((rng.gen::<f64>() * dim as f64 * alpha) as usize)
-                .max(0)
-                .min(dim);
+    ) -> (f64, DMatrix<f64>, f64, f64, usize) {
+        let dim = grad.len();
 
-            // For simplicity, just generate random directions and normalize
-            if m > 0 {
-                for _ in 0..m {
-                    let mut dir = Vec::new();
-                    for _ in 0..dim {
-                        dir.push(rng.gen::<f64>() - 0.5);
-                    }
-                    let norm: f64 = dir.iter().map(|x| x * x).sum::<f64>().sqrt();
-                    if norm > 1e-12 {
-                        for d in dir.iter_mut() {
-                            *d /= norm;
-                        }
-                    }
-                    dirs.push(dir);
+        if r > 0 && sigma < self.ro * self.sigma_zero {
+            // Generate a random orthogonal matrix using the provided RNG
+            let mut new_basis = DMatrix::zeros(dim, dim);
+            for i in 0..dim {
+                for j in 0..dim {
+                    new_basis[(i, j)] = rng.gen::<f64>() - 0.5;
                 }
             }
-            m
-        } else {
-            0
-        };
-
-        // Add random directions to fill up to dim
-        let remaining = dim - dirs.len();
-        for _ in 0..remaining {
-            let mut dir = Vec::new();
-            for _ in 0..dim {
-                dir.push(rng.gen::<f64>() - 0.5);
-            }
-            let norm: f64 = dir.iter().map(|x| x * x).sum::<f64>().sqrt();
-            if norm > 1e-12 {
-                for d in dir.iter_mut() {
-                    *d /= norm;
+            // Normalize rows to get orthonormal basis (approximate)
+            for i in 0..dim {
+                let norm: f64 = (0..dim)
+                    .map(|j| new_basis[(i, j)].powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                if norm > 1e-12 {
+                    for j in 0..dim {
+                        new_basis[(i, j)] /= norm;
+                    }
                 }
             }
-            dirs.push(dir);
+            let sigma_new = self.sigma_zero;
+            let a_new = self.a;
+            let b_new = self.b;
+            r -= 1;
+            return (sigma_new, new_basis, a_new, b_new, r);
         }
 
-        // Create basis matrix
-        let mut basis = DMatrix::zeros(dim, dim);
-        for (i, dir) in dirs.iter().enumerate() {
+        // Create basis with first row as normalized gradient
+        // Start with identity matrix (orthonormal rows)
+        let mut new_basis = DMatrix::identity(dim, dim);
+        let grad_norm: f64 = grad.iter().map(|g| g * g).sum::<f64>().sqrt();
+        if grad_norm > 1e-10 {
+            // Replace first row with normalized gradient
             for j in 0..dim {
-                basis[(i, j)] = dir[j];
+                new_basis[(0, j)] = grad[j] / grad_norm;
             }
         }
 
-        (basis, m_dirs)
+        let mut new_lipschitz = lipschitz_coefficients.to_vec();
+        for l in new_lipschitz.iter_mut() {
+            *l = l.max(1e-10);
+        }
+
+        let mut ratio = 0.0;
+        for j in 0..dim {
+            let r = derivatives[j].abs() / new_lipschitz[j];
+            if r > ratio {
+                ratio = r;
+            }
+        }
+
+        let mut sigma_new = sigma;
+        if ratio < a {
+            sigma_new *= self.gamma_sigma;
+            a *= self.a_minus;
+        } else if ratio > b {
+            sigma_new /= self.gamma_sigma;
+            b *= self.b_plus;
+        } else {
+            a *= self.a_plus;
+            b *= self.b_minus;
+        }
+
+        (sigma_new, new_basis, a, b, r)
     }
 }
 
-impl Default for ASHGF {
+impl Default for ASGF {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Optimizer for ASHGF {
+impl Optimizer for ASGF {
     fn name(&self) -> &'static str {
-        "Adaptive Stochastic Historical Gradient-Free"
+        "Adaptive Stochastic Gradient-Free"
     }
 
     fn optimize<F>(
@@ -317,16 +312,29 @@ impl Optimizer for ASHGF {
         let mut b = self.b;
         let mut r = self.r;
         let mut l_nabla = 0.0;
-        let mut m_dirs = dim;
-        let mut lipschitz_coefficients = vec![1.0; dim];
+        // Initialize Lipschitz coefficients based on the norm of x
+        // This ensures they're not too small for functions like sphere
+        let mut lipschitz_coefficients = vec![2.0 * norm_x.max(1.0); dim];
 
-        let mut basis = DMatrix::identity(dim, dim);
-
-        let mut g_history: Vec<Vec<f64>> = Vec::new();
+        let mut basis = self.generate_random_orthogonal(dim, &mut rng);
 
         if debug {
             println!(
-                "algorithm: ashgf  function: custom  dimension: {}  initial value: {}",
+                "algorithm: asgf  function: custom  dimension: {}  initial value: {}",
+                dim, current_val
+            );
+        }
+
+        if debug {
+            println!(
+                "algorithm: asgf  function: custom  dimension: {}  initial value: {}",
+                dim, current_val
+            );
+        }
+
+        if debug {
+            println!(
+                "algorithm: asgf  function: custom  dimension: {}  initial value: {}",
                 dim, current_val
             );
         }
@@ -339,19 +347,24 @@ impl Optimizer for ASHGF {
                 );
             }
 
-            let (grad, new_lipschitz, lr, derivatives, new_l_nabla, evaluations) = self
-                .grad_estimator(
-                    &x,
-                    self.m,
-                    sigma,
-                    dim,
-                    &lipschitz_coefficients,
-                    &basis,
-                    function,
-                    l_nabla,
-                    m_dirs,
-                    current_val,
+            let (grad, new_lipschitz, lr, derivatives, new_l_nabla) = self.grad_estimator(
+                &x,
+                self.m,
+                sigma,
+                dim,
+                &lipschitz_coefficients,
+                &basis,
+                function,
+                l_nabla,
+                current_val,
+            );
+
+            if debug && i % itprint == 0 {
+                println!(
+                    "  sigma: {}, lr: {}, grad[0]: {}, derivatives[0]: {}",
+                    sigma, lr, grad[0], derivatives[0]
                 );
+            }
 
             if !grad.iter().all(|g| g.is_finite()) || !lr.is_finite() {
                 if debug {
@@ -361,11 +374,6 @@ impl Optimizer for ASHGF {
                     );
                 }
                 break;
-            }
-
-            g_history.push(grad.clone());
-            if g_history.len() > self.t {
-                g_history.remove(0);
             }
 
             for j in 0..dim {
@@ -392,89 +400,22 @@ impl Optimizer for ASHGF {
 
             if norm_diff < self.eps {
                 break;
-            }
-
-            if i < self.t {
-                // m_dirs = dim; // unused in this branch
             } else {
-                let m_eff = m_dirs.max(1).min(dim);
-
-                // r_G = mean of best evaluations among subspace directions
-                // r_G_ort = mean among orthogonal complement
-                // We use the minimum evaluation along each direction
-                let vals_g: Vec<f64> = (0..m_eff)
-                    .map(|j| {
-                        evaluations[j]
-                            .iter()
-                            .fold(f64::INFINITY, |acc, &val| if val < acc { val } else { acc })
-                    })
-                    .collect();
-                let vals_ort: Vec<f64> = (m_eff..dim)
-                    .map(|j| {
-                        evaluations[j]
-                            .iter()
-                            .fold(f64::INFINITY, |acc, &val| if val < acc { val } else { acc })
-                    })
-                    .collect();
-
-                let r_g = if !vals_g.is_empty() {
-                    Some(vals_g.iter().sum::<f64>() / vals_g.len() as f64)
-                } else {
-                    None
-                };
-                let r_g_ort = if !vals_ort.is_empty() {
-                    Some(vals_ort.iter().sum::<f64>() / vals_ort.len() as f64)
-                } else {
-                    None
-                };
-
-                // Update alpha based on which region gives better (lower) values
-                match (r_g, r_g_ort) {
-                    (Some(rg), Some(rg_ort)) if rg < rg_ort => {
-                        self.alpha = (self.delta * self.alpha).min(self.k1);
-                    }
-                    (Some(_), Some(_)) | (None, Some(_)) => {
-                        self.alpha = (self.alpha / self.delta).max(self.k2);
-                    }
-                    _ => {}
-                }
-            }
-
-            if r > 0 && sigma < self.ro * self.sigma_zero {
-                basis = self.generate_random_orthogonal(dim, &mut rng);
-                sigma = self.sigma_zero;
-                a = self.a;
-                b = self.b;
-                r -= 1;
-                m_dirs = dim;
-            } else if i >= self.t {
-                let (new_basis, new_m) =
-                    self.compute_directions_sges(dim, &g_history, self.alpha, &mut rng);
+                let (new_sigma, new_basis, new_a, new_b, new_r) = self.subroutine(
+                    sigma,
+                    &grad,
+                    &derivatives,
+                    &new_lipschitz,
+                    a,
+                    b,
+                    r,
+                    &mut rng,
+                );
+                sigma = new_sigma;
                 basis = new_basis;
-                m_dirs = new_m;
-            } else {
-                basis = self.generate_random_orthogonal(dim, &mut rng);
-                m_dirs = dim;
-            }
-
-            let mut ratio = 0.0;
-            for j in 0..dim {
-                let denom = new_lipschitz[j].max(1e-10);
-                let r = derivatives[j].abs() / denom;
-                if r > ratio {
-                    ratio = r;
-                }
-            }
-
-            if ratio < a {
-                sigma *= self.gamma_sigma_minus;
-                a *= self.a_minus;
-            } else if ratio > b {
-                sigma *= self.gamma_sigma_plus;
-                b *= self.b_plus;
-            } else {
-                a *= self.a_plus;
-                b *= self.b_minus;
+                a = new_a;
+                b = new_b;
+                r = new_r;
             }
 
             l_nabla = new_l_nabla;
@@ -503,16 +444,16 @@ mod tests {
     use crate::functions::sphere;
 
     #[test]
-    fn test_ashgf_convergence() {
-        let mut ashgf = ASHGF::new();
-        let result = ashgf.optimize(sphere, 10, 50, None, false, 25).unwrap();
+    fn test_asgf_convergence() {
+        let mut asgf = ASGF::new();
+        let result = asgf.optimize(sphere, 10, 50, None, false, 25).unwrap();
 
         let initial = result.all_values[0];
         let final_best = result.best_value();
 
         assert!(
             final_best < initial,
-            "ASHGF should improve from initial value"
+            "ASGF should improve from initial value"
         );
     }
 }

@@ -10,23 +10,17 @@ fn main() {
 
     // Test with sphere function
     let mut gd = GD::new();
-    let (best_values, all_values) = gd.optimize(sphere, dim, iters, None, true, 25);
+    let result = gd.optimize(sphere, dim, iters, None, true, 25).unwrap();
 
     println!("GD Results:");
-    println!(
-        "  Best value: {:.6e}",
-        best_values.last().map(|v| v[1]).unwrap_or(0.0)
-    );
-    println!("  Iterations: {}", all_values.len());
+    println!("  Best value: {:.6e}", result.best_value());
+    println!("  Iterations: {}", result.all_values.len());
 
     // Test with ASHGF
     let mut ashgf = ASHGF::new();
-    let (best_values, all_values) = ashgf.optimize(sphere, dim, iters, None, true, 25);
+    let result = ashgf.optimize(sphere, dim, iters, None, true, 25).unwrap();
 
     println!("\nASHGF Results:");
-    println!(
-        "  Best value: {:.6e}",
-        best_values.last().map(|v| v[1]).unwrap_or(0.0)
-    );
-    println!("  Iterations: {}", all_values.len());
+    println!("  Best value: {:.6e}", result.best_value());
+    println!("  Iterations: {}", result.all_values.len());
 }

@@ -31,12 +31,12 @@ fn bench_optimizers(c: &mut Criterion) {
     for dim in [10, 50].iter() {
         group.bench_with_input(BenchmarkId::new("GD", dim), dim, |b, &dim| {
             let mut gd = GD::new();
-            b.iter(|| gd.optimize(sphere, dim, 50, None, false, 25));
+            b.iter(|| gd.optimize(sphere, dim, 50, None, false, 25).unwrap());
         });
 
         group.bench_with_input(BenchmarkId::new("ASHGF", dim), dim, |b, &dim| {
             let mut ashgf = ASHGF::new();
-            b.iter(|| ashgf.optimize(sphere, dim, 50, None, false, 25));
+            b.iter(|| ashgf.optimize(sphere, dim, 50, None, false, 25).unwrap());
         });
     }
 
