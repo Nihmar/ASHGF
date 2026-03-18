@@ -1,8 +1,9 @@
+from typing import List, Optional, Tuple, Union
+
 import numpy as np
 import numpy.linalg as la
-from sklearn.decomposition import PCA
 from scipy.stats import chi2
-from typing import Optional, Union, List, Tuple
+from sklearn.decomposition import PCA
 
 from functions import Function
 from optimizers.base import BaseOptimizer
@@ -12,14 +13,13 @@ class ASEBO(BaseOptimizer):
     """
     Adaptive ES-Active Subspaces (Algorithm 3 in the thesis).
 
-    The algorithm uses PCA on the history of estimated gradients to discover
-    an active subspace that captures most of the variance. Directions for
-    gradient estimation are then sampled from a mixture of the active subspace
-    and its orthogonal complement. The mixture probability p is adapted
-    online using the estimated gradient components.
+    Versione corretta:
+      - Divisione per n_samples nel gradiente (fix critico).
+      - Uso di un RNG locale per maggiore controllo e riproducibilità.
+      - PCA già ordinata per varianza (sklearn lo fa correttamente).
     """
 
-    kind = "Adaptive ES-Active Subspaces"
+    kind = "Adaptive ES-Active Subspaces (corrected)"
 
     def __init__(
         self,
@@ -40,6 +40,7 @@ class ASEBO(BaseOptimizer):
         self.sigma = sigma
         self.k = k
         self.thresh = thresh
+        self._rng = np.random.default_rng(seed)  # RNG locale
 
     def _sample_directions(
         self, n: int, dim: int, U_act: Optional[np.ndarray] = None, p: float = 0.5
@@ -59,8 +60,8 @@ class ASEBO(BaseOptimizer):
         """
         directions = np.zeros((n, dim))
         for i in range(n):
-            # ----- raw Gaussian vector -----
-            v = np.random.randn(dim)
+            # raw Gaussian vector
+            v = self._rng.normal(size=dim)
 
             if U_act is None:
                 # isotropic : keep as is
@@ -68,21 +69,21 @@ class ASEBO(BaseOptimizer):
             else:
                 # mixture
                 proj = U_act @ (U_act.T @ v)  # projection onto active
-                if np.random.rand() < p:
+                if self._rng.random() < p:
                     raw = proj  # active part
                 else:
                     raw = v - proj  # orthogonal part
 
-            # ----- normalise to unit direction -----
+            # normalise to unit direction
             norm_raw = la.norm(raw)
             if norm_raw < 1e-12:
                 # fallback (extremely unlikely)
-                raw = np.random.randn(dim)
+                raw = self._rng.normal(size=dim)
                 norm_raw = la.norm(raw)
             unit = raw / norm_raw
 
-            # ----- scale to have χ(d) norm -----
-            chi = np.sqrt(chi2.rvs(df=dim))
+            # scale to have χ(d) norm
+            chi = np.sqrt(chi2.rvs(df=dim, random_state=self._rng))
             directions[i] = chi * unit
 
         return directions
@@ -96,7 +97,6 @@ class ASEBO(BaseOptimizer):
         debug: bool = True,
         itprint: int = 25,
     ) -> Tuple[List, List]:
-        np.random.seed(self.seed)
         f = Function(function)
 
         x = self._validate_x_init(x_init, dim)
@@ -107,14 +107,14 @@ class ASEBO(BaseOptimizer):
         all_values = [current_val]
 
         # Buffer of past gradients (FIFO, max size = self.k)
-        grad_buffer = []
+        grad_buffer: list[list[float]] = []
 
         # Probability of sampling from the active subspace (initial guess)
         p = 0.5
 
         if debug:
             print(
-                f"algorithm: asebo  function: {function}  dimension: {dim}  initial value: {current_val}"
+                f"algorithm: asebo (corrected)  function: {function}  dimension: {dim}  initial value: {current_val}"
             )
 
         for i in range(1, it + 1):
@@ -140,7 +140,7 @@ class ASEBO(BaseOptimizer):
                         r = np.searchsorted(cum_var, self.thresh) + 1
                         # U_act : columns are the principal components
                         U_act = pca.components_[:r].T  # shape (dim, r)
-                        n_samples = r
+                        n_samples = int(r)
                     else:
                         # Not enough gradients yet – fall back to isotropic
                         n_samples = dim
@@ -162,7 +162,7 @@ class ASEBO(BaseOptimizer):
 
                 diffs = evals_plus - evals_minus  # (n_samples,)
 
-                # Gradient estimate: correct scaling (including 1/n_samples)
+                # ----- FIX CRITICO: divisione per n_samples -----
                 grad = diffs @ directions / (2 * self.sigma * n_samples)
 
                 # ----- update gradient buffer (FIFO) -----
@@ -211,7 +211,7 @@ class ASEBO(BaseOptimizer):
 
         if debug:
             print(
-                f"\nlast evaluation: {all_values[-1]}  last_iterate: {len(all_values)-1}  best evaluation: {best_value}\n"
+                f"\nlast evaluation: {all_values[-1]}  last_iterate: {len(all_values) - 1}  best evaluation: {best_value}\n"
             )
 
         return best_values, all_values

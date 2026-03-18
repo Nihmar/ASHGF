@@ -587,17 +587,6 @@ def sine(x):
     return s
 
 
-@njit(cache=True)
-def trid(x):
-    s1 = 0.0
-    s2 = 0.0
-    for i in range(len(x)):
-        s1 += (x[i] - 1.0) ** 2
-    for i in range(1, len(x)):
-        s2 += x[i] * x[i - 1]
-    return s1 - s2
-
-
 # ---------------------------------------------------------------------------
 # Transcendental — still @njit; crossover to NumPy only at N ≈ 5000
 # ---------------------------------------------------------------------------

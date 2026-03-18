@@ -8,3 +8,5 @@ pyarrow
 tqdm
 numba
 llvmlite
+ruff
+mypy

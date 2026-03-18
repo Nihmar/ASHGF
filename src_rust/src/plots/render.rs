@@ -103,7 +103,7 @@ pub fn plot_convergence_with_stats(
         .draw()?;
 
     let color = get_algorithm_color(algorithm);
-    let color_for_legend = color.clone();
+    let color_for_legend = color;
 
     let min_points: Vec<(u32, f64)> = (0..n_points)
         .filter(|&i| stats.min[i].is_finite())
@@ -119,14 +119,14 @@ pub fn plot_convergence_with_stats(
         .collect();
 
     chart
-        .draw_series(LineSeries::new(min_points, color.clone()))?
+        .draw_series(LineSeries::new(min_points, color))?
         .label("min")
         .legend(move |(x, y)| {
             PathElement::new(vec![(x, y), (x + 20, y)], color_for_legend.stroke_width(1))
         });
 
     chart
-        .draw_series(LineSeries::new(max_points, color.clone()))?
+        .draw_series(LineSeries::new(max_points, color))?
         .label("max")
         .legend(move |(x, y)| {
             PathElement::new(vec![(x, y), (x + 20, y)], color_for_legend.stroke_width(1))
@@ -256,7 +256,7 @@ pub fn plot_all_algorithms(results: &ResultsData, function: &str, output_dir: &P
             .map(|i| (i as u32, stats.mean[i]))
             .collect();
 
-        let color_for_legend = color.clone();
+        let color_for_legend = color;
         let alg_label = algorithm.clone();
         chart
             .draw_series(LineSeries::new(mean_points, color.stroke_width(2)))?

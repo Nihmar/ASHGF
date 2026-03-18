@@ -10,14 +10,12 @@ from optimizers.base import BaseOptimizer
 class SGES(BaseOptimizer):
     """
     Self-Guided Evolution Strategies (Algorithm 5 in the thesis).
-    Versione corretta: usa SVD per il sottospazio, finestra di dimensione k,
-    e adatta alpha come descritto nell'equazione (2.14).
 
-    Bugfix rispetto al codice originale:
-      1. Le direzioni SGES non venivano mai usate (erano sovrascritte).
-      2. La finestra dei gradienti era mantenuta con dimensione t invece di k.
-      3. La generazione delle direzioni nel sottospazio era errata (mancava SVD).
-      4. Il seed veniva resettato a ogni iterazione, rendendo le direzioni identiche.
+    Versione corretta:
+      - Un unico RNG (nessun reset del seed).
+      - Le direzioni SGES vengono effettivamente utilizzate.
+      - Il sottospazio dei gradienti storici è costruito via SVD.
+      - Adattamento di alpha secondo l'equazione (2.14).
     """
 
     kind = "Self-Guided Evolution Strategies (corrected)"
@@ -52,6 +50,9 @@ class SGES(BaseOptimizer):
         self.delta = delta
         self.t = t
 
+        # RNG condiviso (inizializzato una volta sola)
+        self._rng = np.random.default_rng(seed)
+
     def optimize(
         self,
         function: str,
@@ -61,7 +62,6 @@ class SGES(BaseOptimizer):
         debug: bool = True,
         itprint: int = 25,
     ) -> Tuple[List, List]:
-        np.random.seed(self.seed)  # seed globale per l'intera ottimizzazione
         f = Function(function)
         alpha = self.alpha
 
@@ -87,7 +87,7 @@ class SGES(BaseOptimizer):
                     )
 
                 if i < self.t:
-                    # Fase di warmup: stima standard con direzioni casuali
+                    # Warmup: stima standard con smoothing gaussiano centrale
                     grad, evaluations = self._grad_estimator(x, f, dim)
                     G.append(grad)
                 else:
@@ -97,30 +97,19 @@ class SGES(BaseOptimizer):
                     )
                     G.append(grad)
                     if len(G) > self.k:
-                        G.pop(0)  # mantiene solo gli ultimi k gradienti
+                        G.pop(0)
 
                     # Adattamento di alpha (eq. 2.14)
-                    # Calcola i minimi delle coppie per le direzioni nel sottospazio (M)
-                    # e per quelle esplorative (dim-M)
-                    if M > 0:
-                        vals_G = [
-                            min(evaluations[2 * j], evaluations[2 * j + 1])
-                            for j in range(M)
-                        ]
-                        r_G = np.mean(vals_G)
-                    else:
-                        r_G = None
+                    # I valori di evaluations sono interleaved: [f⁺₁, f⁻₁, f⁺₂, f⁻₂, ...]
+                    # Calcola il minimo delle due valutazioni per ogni direzione
+                    vals = np.array(evaluations).reshape(-1, 2).min(axis=1)
+                    vals_G = vals[:M] if M > 0 else np.array([])
+                    vals_ort = vals[M:] if M < dim else np.array([])
 
-                    if M < dim:
-                        vals_ort = [
-                            min(evaluations[2 * j], evaluations[2 * j + 1])
-                            for j in range(M, dim)
-                        ]
-                        r_G_ort = np.mean(vals_ort)
-                    else:
-                        r_G_ort = None
+                    r_G = np.mean(vals_G) if len(vals_G) > 0 else None
+                    r_G_ort = np.mean(vals_ort) if len(vals_ort) > 0 else None
 
-                    # Logica di adattamento
+                    # Logica di adattamento (identica a quella descritta nella tesi)
                     if r_G is None or (r_G_ort is not None and r_G < r_G_ort):
                         alpha = min(self.delta * alpha, self.k1)
                     elif r_G_ort is None or (r_G is not None and r_G >= r_G_ort):
@@ -158,7 +147,7 @@ class SGES(BaseOptimizer):
         Stima del gradiente con smoothing gaussiano centrale (fase di warmup).
         Versione vettorizzata.
         """
-        directions = np.random.randn(dim, dim)
+        directions = self._rng.normal(size=(dim, dim))
 
         points_plus = x + self.sigma * directions
         points_minus = x - self.sigma * directions
@@ -169,6 +158,7 @@ class SGES(BaseOptimizer):
         diffs = evals_plus - evals_minus
         grad = diffs @ directions / (2 * self.sigma * dim)
 
+        # Interleave: [f⁺₁, f⁻₁, f⁺₂, f⁻₂, ...]
         evaluations = np.empty(2 * dim)
         evaluations[0::2] = evals_plus
         evaluations[1::2] = evals_minus
@@ -204,42 +194,41 @@ class SGES(BaseOptimizer):
         Costruzione delle direzioni di ricerca:
         - M ~ Binomiale(dim, alpha) dal sottospazio dei gradienti recenti (SVD)
         - (dim - M) da N(0,I) (esplorazione)
+
         Restituisce una matrice (dim, dim) con le direzioni (righe) e il numero M.
         """
         # Campiona M
-        M = np.random.binomial(dim, alpha)
+        M = self._rng.binomial(dim, alpha)
         M = max(0, min(M, dim))
 
-        # Filtra i gradienti che contengono NaN
+        # Filtra i gradienti che contengono NaN/inf
         G_arr = np.array(G)
-        G_clean = G_arr[~np.isnan(G_arr).any(axis=1)]
+        G_clean = G_arr[np.isfinite(G_arr).all(axis=1)]
 
-        dirs_G = np.zeros((0, dim))  # inizialmente vuoto
+        dirs_G = np.zeros((0, dim))
 
-        if M > 0:
-            if len(G_clean) >= 2:
-                # Costruisci la base ortonormale del sottospazio via SVD di G.T
-                # G_clean ha dimensione (n_grads, dim) → G_clean.T è (dim, n_grads)
-                U, s, _ = np.linalg.svd(
-                    G_clean.T, full_matrices=False
-                )  # U: (dim, n_grads)
-                rank = np.sum(s > 1e-10)
-                if rank > 0:
-                    U_sub = U[:, :rank]  # base ortonormale (dim, rank)
-                    z = np.random.randn(rank, M)  # coefficienti casuali (rank, M)
-                    dirs_G = (U_sub @ z).T  # direzioni nel sottospazio (M, dim)
-                else:
-                    # rango zero (improbabile) → fallback a N(0,I)
-                    dirs_G = np.random.randn(M, dim)
+        if M > 0 and len(G_clean) >= 2:
+            # Costruisci la base ortonormale del sottospazio via SVD di G_clean.T
+            # G_clean: (n_grads, dim) → G_clean.T: (dim, n_grads)
+            U, s, _ = np.linalg.svd(G_clean.T, full_matrices=False)
+            rank = np.sum(s > 1e-10)
+            if rank > 0:
+                U_sub = U[:, :int(rank)]  # (dim, rank)
+                z = self._rng.normal(size=(int(rank), M))  # (rank, M)
+                dirs_G = (U_sub @ z).T  # (M, dim)
             else:
-                # Non ci sono abbastanza gradienti validi → N(0,I)
-                dirs_G = np.random.randn(M, dim)
+                # rango zero (improbabile) → fallback a N(0,I)
+                dirs_G = self._rng.normal(size=(M, dim))
+        elif M > 0:
+            # Non ci sono abbastanza gradienti validi → N(0,I)
+            dirs_G = self._rng.normal(size=(M, dim))
 
-        # Direzioni esplorative
-        dirs_rand = np.random.randn(dim - M, dim) if dim - M > 0 else np.zeros((0, dim))
+        # Direzioni esplorative (casuali)
+        dirs_rand = (
+            self._rng.normal(size=(dim - M, dim)) if dim - M > 0 else np.zeros((0, dim))
+        )
 
         # Concatena: prime M dal sottospazio, poi le esplorative
-        directions = np.concatenate((dirs_G, dirs_rand), axis=0)
+        directions = np.vstack((dirs_G, dirs_rand))
 
-        # Nota: NON normalizzare! Le direzioni devono mantenere la loro distribuzione.
         return directions, M

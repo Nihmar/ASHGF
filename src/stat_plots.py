@@ -6,9 +6,8 @@ This script loads results from Parquet files and generates convergence plots.
 
 import argparse
 import os
-import sys
-import warnings
-from os import path
+import warnings  # noqa: E402
+from os import path  # noqa: E402
 from typing import Dict, List, Optional
 
 # Determine project root (parent of src/)
@@ -21,9 +20,9 @@ else:
 # Ignore the specific deprecation warning from multiprocessing.forkserver
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="multiprocessing")
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
 
 
 DEFAULT_FUNCTIONS: List[str] = ["sphere", "levy", "rastrigin", "ackley"]
@@ -266,7 +265,7 @@ def main() -> None:
         df = load_results(args.dim)
     except FileNotFoundError as e:
         print(f"Error: {e}")
-        print(f"Run profiles.py first to generate results.")
+        print("Run profiles.py first to generate results.")
         return
 
     # Get all functions from data if not specified
@@ -320,7 +319,7 @@ def main() -> None:
             comp_path = os.path.join(func_dir, "comparison.png")
             if not path.exists(comp_path):
                 plot_all_algorithms(df, function, func_dir, False)
-                print(f"  Saved: comparison.png")
+                print("  Saved: comparison.png")
 
     # Generate summary table
     if args.summary:

@@ -35,5 +35,10 @@ harness = false
 name = "ashgf"
 path = "src/lib.rs"
 
+[[bin]]
+name = "plots"
+path = "src/bin/plots.rs"
+required-features = ["plotting"]
+
 [[test]]
 name = "integration_tests"

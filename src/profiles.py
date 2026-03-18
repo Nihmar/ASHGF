@@ -10,7 +10,6 @@ Usage:
 import argparse
 import logging
 import os
-import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass

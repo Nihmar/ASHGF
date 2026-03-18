@@ -1,15 +1,14 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import warnings
+import matplotlib.pyplot as plt  # noqa: F401
+import warnings  # noqa: E402
 
 # Ignore the specific deprecation warning from multiprocessing.forkserver
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="multiprocessing")
 
-from optimizers.gd import GD
-from optimizers.sges import SGES
-from optimizers.asebo import ASEBO
-from optimizers.asgf import ASGF
-from optimizers.ashgf import ASHGF
+from optimizers.gd import GD  # noqa: E402, F401
+from optimizers.sges import SGES  # noqa: E402, F401
+from optimizers.asebo import ASEBO  # noqa: E402, F401
+from optimizers.asgf import ASGF  # noqa: E402, F401
+from optimizers.ashgf import ASHGF  # noqa: E402, F401
 
 # np.random.seed(69)
 

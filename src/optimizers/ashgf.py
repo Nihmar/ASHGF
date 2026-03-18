@@ -1,12 +1,10 @@
-import math
-import sys
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import numpy.linalg as la
+from numpy.polynomial.hermite import hermgauss
 from scipy.linalg import orth
 from scipy.stats import special_ortho_group
-from numpy.polynomial.hermite import hermgauss   # Hermite (fisici) -> poi convertiamo
-from typing import Optional, Union, List, Tuple
 
 from functions import Function
 from optimizers.base import BaseOptimizer
@@ -16,19 +14,17 @@ class ASHGF(BaseOptimizer):
     """
     Adaptive Stochastic Historical Gradient-Free (Algorithms 8 + 9 in thesis).
 
-    Combines Directional Gaussian Smoothing (from ASGF) with historical
-    gradient‑guided direction sampling (from SGES) and adaptive sigma / lr.
-
-    CORRECTED VERSION:
-      1. Uses Hermite quadrature (physical) converted to standard normal.
-      2. Fixes probability in direction sampling (now α for subspace).
-      3. Removes erroneous normalization of sampled directions.
-      4. Handles M properly: when historical=False, M = dim (all directions
-         used for Lipschitz estimation).
-      5. Cleaner alpha adaptation.
+    Versione corretta:
+      - RNG locale per riproducibilità.
+      - Insieme I completo per la stima di Lipschitz (eq. 3.1).
+      - Calcolo di L∇ basato solo sulle direzioni del sottospazio storico (quando M < dim).
+      - Quadratura di Gauss-Hermite con conversione corretta a N(0,1).
+      - Generazione delle direzioni con covarianza dei gradienti storici (SVD).
+      - Ortogonalizzazione della base via QR con completamento a rango pieno.
+      - Adattamento di alpha secondo eq. (2.14).
     """
 
-    kind = "Adaptive Stochastic Historical Gradient-Free"
+    kind = "Adaptive Stochastic Historical Gradient-Free (corrected)"
 
     data = {
         "m": 5,
@@ -64,6 +60,7 @@ class ASHGF(BaseOptimizer):
         self.delta = delta
         self.t = t
         super().__init__(seed, eps)
+        self._rng = np.random.default_rng(seed)
 
     def optimize(
         self,
@@ -74,7 +71,6 @@ class ASHGF(BaseOptimizer):
         debug: bool = True,
         itprint: int = 25,
     ) -> Tuple[List, List]:
-        np.random.seed(self.seed)
         f = Function(function)
         alpha = self.alpha
 
@@ -86,26 +82,26 @@ class ASHGF(BaseOptimizer):
         all_values = [current_val]
 
         norm_x = la.norm(x)
-        ASHGF.data["sigma_zero"] = norm_x / 10
+        ASHGF.data["sigma_zero"] = float(norm_x / 10)
         sigma = ASHGF.data["sigma_zero"]
         A = ASHGF.data["A"]
         B = ASHGF.data["B"]
         r = ASHGF.data["r"]
         L_nabla = 0.0
-        M = dim                     # initial: no historical, so all directions
+        M = dim  # initial: no historical, so all directions
         lipschitz_coefficients = np.ones(dim)
-        basis = special_ortho_group.rvs(dim)
+        basis = special_ortho_group.rvs(dim, random_state=self._rng)
 
-        G = []
+        G = []  # buffer storico dei gradienti
 
-        # Precompute quadrature nodes/weights (physical Hermite -> convert to standard normal)
-        m = ASHGF.data["m"]
+        # Precompute quadrature nodes/weights (physical Hermite -> standard normal)
+        m = int(ASHGF.data["m"])
         nodes_phys, weights_phys = hermgauss(m)
-        nodes = nodes_phys * np.sqrt(2)            # nodes for standard normal
-        weights = weights_phys / np.sqrt(np.pi)    # weights for standard normal
+        nodes = nodes_phys * np.sqrt(2)  # nodes for standard normal
+        weights = weights_phys / np.sqrt(np.pi)  # weights for standard normal
         mid = m // 2
 
-        # Precompute pair indices for Lipschitz estimation
+        # Precompute pair indices for Lipschitz estimation (set I, eq. 3.1)
         pair_indices = [
             (a, b)
             for a in range(m)
@@ -114,28 +110,45 @@ class ASHGF(BaseOptimizer):
         ]
 
         if debug:
-            print(f"algorithm: ashgf  function: {function}  dimension: {dim}  initial value: {current_val}")
+            print(
+                f"algorithm: ashgf (corrected)  function: {function}  dimension: {dim}  initial value: {current_val}"
+            )
 
         for i in range(1, it + 1):
             try:
                 if debug and i % itprint == 0:
-                    print(f"{i}th iteration - value: {current_val}  last best value: {best_value}")
+                    print(
+                        f"{i}th iteration - value: {current_val}  last best value: {best_value}"
+                    )
 
                 grad, lipschitz_coefficients, lr, derivatives, L_nabla, evaluations = (
                     self._grad_estimator(
-                        x, m, sigma, dim, lipschitz_coefficients, basis, f,
-                        L_nabla, M, current_val, nodes, weights, pair_indices
+                        x,
+                        m,
+                        sigma,
+                        dim,
+                        lipschitz_coefficients,
+                        basis,
+                        f,
+                        L_nabla,
+                        M,
+                        current_val,
+                        nodes,
+                        weights,
+                        pair_indices,
                     )
                 )
 
                 if not (np.isfinite(grad).all() and np.isfinite(lr)):
                     if debug:
-                        print(f"Warning: non-finite gradient or learning rate at iteration {i}")
+                        print(
+                            f"Warning: non-finite gradient or learning rate at iteration {i}"
+                        )
                     break
 
                 G.append(grad)
                 if len(G) > self.t:
-                    G = G[1:]
+                    G.pop(0)
 
                 x_new = x - lr * grad
                 new_val = f.evaluate(x_new)
@@ -157,12 +170,16 @@ class ASHGF(BaseOptimizer):
                     else:
                         if i >= self.t + 1:
                             # Adapt alpha (eq. 2.14)
-                            # r_G = mean of best evaluations among subspace directions
-                            # r_G_ort = mean among orthogonal complement
-                            # We use the minimum evaluation along each direction
-                            # (the evaluations[j] array contains the m quadrature points)
-                            vals_G = [min(evaluations[j]) for j in range(M)] if M > 0 else []
-                            vals_ort = [min(evaluations[j]) for j in range(M, dim)] if M < dim else []
+                            # Extract the minimum evaluation along each direction
+                            # evaluations[j] contains the m quadrature points
+                            vals_G = (
+                                [min(evaluations[j]) for j in range(M)] if M > 0 else []
+                            )
+                            vals_ort = (
+                                [min(evaluations[j]) for j in range(M, dim)]
+                                if M < dim
+                                else []
+                            )
 
                             r_G = np.mean(vals_G) if vals_G else None
                             r_G_ort = np.mean(vals_ort) if vals_ort else None
@@ -178,7 +195,16 @@ class ASHGF(BaseOptimizer):
                         historical = True
 
                     sigma, basis, A, B, r, M = self._subroutine(
-                        sigma, grad, derivatives, lipschitz_coefficients, A, B, r, G, alpha, historical
+                        sigma,
+                        grad,
+                        derivatives,
+                        lipschitz_coefficients,
+                        A,
+                        B,
+                        r,
+                        G,
+                        alpha,
+                        historical,
                     )
 
                 x = x_new
@@ -190,13 +216,27 @@ class ASHGF(BaseOptimizer):
                 break
 
         if debug:
-            print(f"\nlast evaluation: {all_values[-1]}  last_iterate: {len(all_values)-1}  best evaluation: {best_value}\n")
+            print(
+                f"\nlast evaluation: {all_values[-1]}  last_iterate: {len(all_values) - 1}  best evaluation: {best_value}\n"
+            )
 
         return best_values, all_values
 
     def _grad_estimator(
-        self, x, m, sigma, dim, lipschitz_coefficients, basis, f,
-        L_nabla, M, value, nodes, weights, pair_indices
+        self,
+        x,
+        m,
+        sigma,
+        dim,
+        lipschitz_coefficients,
+        basis,
+        f,
+        L_nabla,
+        M,
+        value,
+        nodes,
+        weights,
+        pair_indices,
     ):
         """
         DGS gradient estimator with Gauss-Hermite quadrature (eq. 2.22)
@@ -247,8 +287,17 @@ class ASHGF(BaseOptimizer):
         return grad, lipschitz_coefficients, lr, derivatives, L_nabla, evaluations
 
     def _subroutine(
-        self, sigma, grad, derivatives, lipschitz_coefficients, A, B, r,
-        G, alpha, historical
+        self,
+        sigma,
+        grad,
+        derivatives,
+        lipschitz_coefficients,
+        A,
+        B,
+        r,
+        G,
+        alpha,
+        historical,
     ):
         """
         Parameter update (Algorithm 9).
@@ -258,24 +307,24 @@ class ASHGF(BaseOptimizer):
 
         # Reset if sigma too small and resets left
         if r > 0 and sigma < ASHGF.data["ro"] * ASHGF.data["sigma_zero"]:
-            basis = special_ortho_group.rvs(dim)
+            basis = special_ortho_group.rvs(dim, random_state=self._rng)
             sigma = ASHGF.data["sigma_zero"]
             A = ASHGF.data["A"]
             B = ASHGF.data["B"]
             r -= 1
             # After reset, we will go through normal loop; M will be set later
             # (in the main loop based on i and historical flag)
-            # We return M = dim as default (since historical will likely be False first)
             M = dim
             return sigma, basis, A, B, r, M
 
         if historical:
             dirs, M = self._compute_directions_sges(dim, G, alpha)
             # Orthonormalize the directions (rows are basis vectors)
-            basis = orth(dirs.T).T   # orth returns columns orthonormal, so transpose
+            # orth() returns columns orthonormal, so we transpose
+            basis = orth(dirs.T).T
         else:
-            M = dim    # when not using historical, all directions are "subspace" for L_G
-            basis = special_ortho_group.rvs(dim)
+            M = dim  # when not using historical, all directions are "subspace" for L_G
+            basis = special_ortho_group.rvs(dim, random_state=self._rng)
 
         # Ensure basis spans R^dim (if rank-deficient, complement)
         if basis.shape[0] != dim or basis.shape[1] != dim:
@@ -284,7 +333,7 @@ class ASHGF(BaseOptimizer):
             rank = np.sum(s > 1e-10)
             if rank < dim:
                 # Generate random orthonormal completion
-                Q = orth(np.random.randn(dim, dim - rank))
+                Q = orth(self._rng.normal(size=(dim, dim - rank)))
                 basis = np.hstack([U[:, :rank], Q])
             else:
                 basis = U
@@ -313,7 +362,7 @@ class ASHGF(BaseOptimizer):
         Returns (directions matrix, M).
         """
         G_arr = np.array(G)
-        G_clean = G_arr[~np.isnan(G_arr).any(axis=1)]
+        G_clean = G_arr[np.isfinite(G_arr).all(axis=1)]
 
         if len(G_clean) < 2:
             cov_G = np.eye(dim)
@@ -326,12 +375,14 @@ class ASHGF(BaseOptimizer):
                 cov_G -= eigvals.min() * np.eye(dim)
 
         # Number of directions from the gradient subspace (exploitation)
-        M = np.random.binomial(dim, alpha)   # FIXED: now alpha is probability for subspace
+        M = self._rng.binomial(
+            dim, alpha
+        )  # FIXED: now alpha is probability for subspace
         M = max(0, min(M, dim))
 
         try:
             if M > 0:
-                dirs_G = np.random.multivariate_normal(np.zeros(dim), cov_G, M)
+                dirs_G = self._rng.multivariate_normal(np.zeros(dim), cov_G, size=M)
                 # No normalization here – raw samples are fine
             else:
                 dirs_G = np.zeros((0, dim))
@@ -339,8 +390,8 @@ class ASHGF(BaseOptimizer):
             dirs_G = np.zeros((0, dim))
             M = 0
 
-        dirs_rand = np.random.multivariate_normal(np.zeros(dim), np.eye(dim), dim - M)
-        dirs = np.concatenate((dirs_G, dirs_rand), axis=0)
+        dirs_rand = self._rng.normal(size=(dim - M, dim))
+        dirs = np.vstack((dirs_G, dirs_rand))
 
         # Normalize each direction to unit length (as required for basis)
         norms = la.norm(dirs, axis=1, keepdims=True)

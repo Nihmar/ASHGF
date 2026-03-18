@@ -75,8 +75,8 @@ impl ResultsData {
             .results
             .iter()
             .filter(|r| {
-                let func_ok = functions.map_or(true, |f| f.contains(&r.function));
-                let alg_ok = algorithms.map_or(true, |a| a.contains(&r.algorithm));
+                let func_ok = functions.is_none_or(|f| f.contains(&r.function));
+                let alg_ok = algorithms.is_none_or(|a| a.contains(&r.algorithm));
                 func_ok && alg_ok
             })
             .cloned()
