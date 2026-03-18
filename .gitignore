@@ -208,3 +208,23 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# =============================================================================
+# Rust project (src_rust)
+# =============================================================================
+src_rust/target/
+
+# Cargo lock files - optional, usually ignored for libraries
+# Uncomment if you want to commit dependency versions
+# src_rust/Cargo.lock
+
+# Build artifacts
+*.rlib
+*.a
+
+# Debug builds
+debug/
+release/
+
+# Benchmark results
+benches/criterion/
