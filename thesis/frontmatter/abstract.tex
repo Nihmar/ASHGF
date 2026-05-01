@@ -1,0 +1,7 @@
+%!TEX root = ../dissertation.tex
+
+Optimization of black-box functions has been of interest to researchers for many years and has become more relevant since the advent of reinforcement learning problems, which goes along with the development of machine learning.
+
+One of the ways used to tackle the problem is the use of evolutionary strategy algorithms. These are able to  optimize the given function without the need to compute the gradient of the function itself, which is the main problem while dealing with black-box functions, and they also have theoretical guarantees for their ability to converge to an optimum. After a brief discussion of state-of-the-art algorithms, in this thesis a novel algorithm is presented and compared to them. The algorithm, called ASHGF, implements adaptivity of parameters to escape local global minima and use of historical gradients in order to deal with the exploration-exploitation trade-off. Some theoretical results are given, and it is further numerically validated.
+
+All the algorithms are first compared on a standard testbed and then on a set of reinforcement learning problems. It will be shown that the algorithm can outperform all the other state-of-the-art algorithms.

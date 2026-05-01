@@ -1,0 +1,18 @@
+%!TEX root = ../dissertation.tex
+% !TeX spellcheck = en_GB
+
+\chapter{Conclusion}
+\label{conclusion}
+
+Starting with Chapter \ref{chapt:2}, this thesis presented and studied current state-of-the-art algorithms proposed and used in the field of black-box optimization. The path follows the historical progress and evolution of the field showing ideas and techniques used by authors to improve the fundamental idea of Nesterov \cite{nesterov2017random}, to enhance performances in optimization of non-convex functions and Reinforcement Learning problems. The main basic ideas are the following:
+\begin{itemize}
+	\item to parallelize the computations made by the algorithm with the use of multi-core CPUs;
+	\item to specialize the choice of random directions in order to take into account the exploration-exploitation trade-off, view taken from the Reinforcement Learning framework;
+	\item to implement a novel way to estimate the gradient and adaptivity of the parameters of the algorithm itself.
+\end{itemize}
+
+In Chapter \ref{chapt:3} a novel algorithm was presented inspired by the ones presented in the literature. Its adaptivity and use of previous gradients information allow to improve the performance with respect to state-of-the-art methods. In ASHGF the adaptivity of the parameters and the novel way of estimating the gradient, was adapted to the handling of the trade-off between exploration and exploitation. 
+
+Chapter \ref{chapt:4} shows numerical results of ASHGF and other state-of-the-art algorithms on a widely used testbed and two Reinforcement Learning problems. The presented algorithm outperforms the others in all benchmarks: in terms of data and performance profiles, it achieves a better accuracy most of the time while requiring less function evaluations; in terms of its average behaviour, it is the one that performs better on average, outperforming all the algorithms in some functions; solving Reinforcement Learning problems it achieves higher average rewards faster than the competitors.
+
+Further work should focus on rewriting the algorithm, and the others, in order to parallelize its execution and then testing them in a greater pool of functions and, more importantly, reinforcement learning problems, which in this case were few due to technical limitations.

@@ -1,0 +1,374 @@
+%!TEX root = ../dissertation.tex
+% !TeX spellcheck = en_GB 
+
+\chapter{The Algorithm}\label{chapt:3}
+
+In this chapter the proposed algorithm is described in Section \ref{sect:2_4} while the previous sections explain the various pieces that compose it.
+
+%----------------------------------------------------
+
+\section{Historical Gradients}\label{sect:3_2}
+
+As in Algorithm \ref{SGES}, the proposed method uses a buffer of previously calculated gradients in order to sample directions which strives to achieve a better trade-off between exploration and exploitation. The main difference with respect to Algorithm \ref{SGES} lies in the fact that the presented algorithm orthonormalizes the set of directions produced at each iteration, this being needed for the estimation of the gradient.
+
+%----------------------------------------------------
+
+\section{The Gradient Estimator}
+
+Like in Algorithm \ref{ASGF}, the algorithm does not exploit Gaussian Smoothing, but rather makes use Directional Gaussian Smoothing in order to estimate the gradient of the function which is to be optimized. The main difference between Algorithm \ref{ASGF} and \ref{ASHGF} is that the last one uses a equal fixed amount of quadrature points both for directions chosen completely at random and those dependant on the previous estimated gradients as in (\ref{historical sampling}), while the former uses a smaller amount of points for completely random directions and for the single direction dependent on the gradient, it increases the number of points until a threshold of given accuracy is reached. Both from a practical and theoretical point of view the latter approach should be preferable because, at the same time, reduces the time needed to execute the algorithm, reduces the number of function evaluations required by the algorithm and then makes it feasible to talk about convergence results.
+
+%----------------------------------------------------
+
+\section{Adaptation of the Parameters}\label{sect:2_3} 
+
+Lastly, instead of keeping for the whole execution of the algorithm some fixed values of the smoothing parameter $\sigma$ and the learning rate $\lambda$, it modifies them at each iteration, in order to estimate their best values.
+
+\subsection{Learning rate}
+
+To update the learning rate, at each iteration the directional local Lipschitz constants $L_j$ are estimated as:
+
+\begin{equation}\label{Lipschitz constants}
+	L_{j}=\max _{\{i,k\}\in I}\left|\frac{F\left(x+\sigma p_{i} \xi_{j}\right)-F\left(x+\sigma p_{k} \xi_{j}\right)}{\sigma\left(p_{i}-p_{k}\right)}\right| 
+\end{equation}
+
+where $I=\set[\big]{ \{ i,k \} \in \{1,\dots,m \}^2 \given \mid i-\floor{\frac{m}{2}} -1\mid \neq \mid k-\floor{\frac{m}{2}} -1\mid }$. Then the learning rate is computed as:
+
+\begin{equation}\label{learning rate}
+     L_{\nabla} \leftarrow\left(1-\gamma_{L}\right) L_{\mathbf{G}}+\gamma_{L} L_{\nabla} \quad \text{and} \quad \lambda=\sigma / L_{\nabla}
+\end{equation}
+
+where $L_{\mathbf{G}}$ is the max of the estimated Lipschitz constants associated to the directions sampled from $\mathcal{L}_{\mathbf{G}}$. Note that until iteration $T_w$, $L_{\mathbf{G}}$ is the max of all the local Lipschitz constants.
+
+\subsection{Smoothing parameter}
+ 
+At each iteration, to adapt the smoothing parameter to the local geometry, $\forall j=1,\dots,d$, $\widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x, \xi_{j}\right)\right]$ is compared to the corresponding local Lipschitz constant $L_j$. If the max of all the ratios of the absolute value of the two quantities is sufficiently large, $\sigma$ is increase, else it is increased.
+
+Furthermore, the algorithm has a given number of reset of the smoothing parameter $\sigma$ and directions to initial conditions. This is implemented in order to help the algorithm escaping local minima that would otherwise make it stop. This happens whenever the smoothing parameter becomes sufficiently small, $\sigma < \rho \sigma_0$.
+
+%----------------------------------------------------
+
+\section{The Algorithm}\label{sect:2_4} 
+
+\begin{algorithm}[!ht]
+\caption{ASHGF algorithm}\label{ASHGF}
+
+\hspace*{\algorithmicindent} \textbf{Input:} function $f$, state $x_0$, smoothing parameter $\sigma_0$, termination tolerance $\varepsilon$, hyper-parameters $\alpha, k$, total iterations \textit{maxiter}, warmup iteration $T_w = k$\\
+\hspace*{\algorithmicindent} \textbf{Output:} point of minimum $\Tilde{x}$
+\begin{algorithmic}[1]
+
+\State Set $\Tilde{x} = x_0$, $\sigma = \sigma_0$ and let $\Xi$ be a random orthonormal basis
+\State Initialize an archive $\mathcal{G}$ of maximum capacity $k$
+\For{$i=0$ to \textit{maxiter}}
+    \For{$j=1$ to $d$}
+        \State \multiline{compute $ \widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x, \xi_{j}\right)\right] $ by (\ref{GHApproximationSmothedSection}) and estimate local Lipschitz constants $L_j$ by (\ref{Lipschitz constants})}
+    \EndFor
+    \State Average Lipschitz constant $L_\nabla$ and compute learning rate $\lambda$ by (\ref{learning rate})
+    \State Assemble the gradient $ \widetilde{\nabla}_{\sigma, \Xi}^{M}[F](x_i) $ by (\ref{DGSGradientEstimatorEq}) and update $ x_{i+1}=x_{i}-\lambda \widetilde{\nabla}_{\sigma, \Xi}^{M}[F](x_i) $
+    \State Add the gradient estimate to $\mathcal{G}$
+    \If{$f\left( x_{i+1}\right) < f(\Tilde{x})$}
+        \State Update $\Tilde{x} = x_{i+1}$
+    \EndIf
+    \If{$\norm{x_{i+1} - x_i}_2 <\varepsilon$}
+        \State \textbf{break}
+    \Else
+        \If{$i < T_w$}
+            \State Set $historical = False$
+        \Else
+            \If{$i >= T_w + 1$}
+                \State Adaptively adjust $\alpha$ by (\ref{adapt alpha})
+            \EndIf
+            \State Set $historical = True$
+        \EndIf
+        \State Update smoothness parameter $\sigma$ and the search directions $\Xi$ by Algorithm (\ref{ASHGFSubroutine})
+    \EndIf
+\EndFor
+
+\end{algorithmic}
+\end{algorithm}
+
+The algorithm, shown in Algorithm \ref{ASHGF}, is a modification of the random search defined by \cite{nesterov2017random} and the Evolutionary Strategy by \cite{Salimans2017}. As said in the previous sections, the three main differences, with respect to the algorithms from the literature, are:
+\begin{itemize}
+    \item the use of previously generated gradients to pick the direction used to get the gradient estimate;
+    \item the adaptivity of the learning rate and of the smoothing parameter;
+    \item the use of Gauss-Hermite quadrature instead of finite differences.
+\end{itemize}
+
+Furthermore, it is to be noted that the algorithm does not use any kind of technique which stems from the zeroth-order optimization literature. In fact it does not exploit variance reduction, momentum, the sign of gradient, estimated hessian or other approaches. It is, in this regard, a simple random search.
+
+\begin{algorithm}[!ht]
+\caption{Parameter update}\label{ASHGFSubroutine}
+
+\hspace*{\algorithmicindent} \textbf{Input:} smoothing parameter $\sigma$, gradient $ \widetilde{\nabla}_{\sigma, \Xi}^{M}[F](x_i)$, local Lipschitz constants $L_1,\dots,L_d$, $historical$, archive of gradients $\mathcal{G}$\\
+\hspace*{\algorithmicindent} \textbf{Data:} number of resets $r$ and reset factor $\rho$, decay rate $\gamma_\sigma$, threshold parameters $A,B$ and their change rates $A_+, A_-, B_+, B_-$\\
+\hspace*{\algorithmicindent} \textbf{Output:} smoothing parameter $\sigma$ and directions $\Xi$
+\begin{algorithmic}[1]
+
+\If{$r>0$ \textbf{and} $\sigma < \rho \sigma_0$}
+    \State Assign $\Xi$ to be a random orthonormal basis and set $\sigma = \sigma_0$
+    \State Set $A,B$ to their initial values and set $r = r-1$
+\Else
+    \If{$historical$}
+        \State Obtain gradient matrix $\mathbf{G}\in\mathbb{R}^{d\text{x}k}$ from $\mathcal{G}$
+        \State Generate $d$ directions as in (\ref{historical sampling})
+        \State Ortho-normalize the directions $\mathcal{D}$
+        \While{$\mathcal{D}$ does not generate $\mathbb{R}^d$}
+            \State Complement $\mathcal{D}$ with random vectors from $\mathcal{N}\left(0, \mathbf{I}\right)$ and orthonormalize
+        \EndWhile
+    \Else
+        \State Set as $\mathcal{D}$ a random orthonormal basis
+    \EndIf
+    \State Update $\Xi = \mathcal{D}$
+    \If{\( \max _{1 \leq j \leq d}\left| \widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x_i, \xi_{j}\right)\right] / L_{j}\right|<A \)}
+        \State Decrease smoothing $\sigma = \sigma \gamma_{\sigma}$ and lower threshold $A=A*A_-$
+    \ElsIf{\( \max _{1 \leq j \leq d}\left| \widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid 
+    	, \xi_{j}\right)\right] / L_{j}\right|> B \)}
+        \State Increase smoothing $\sigma = \sigma / \gamma_{\sigma}$ and upper threshold $B=B*B_+$
+    \Else
+        \State Increase lower threshold $A=A*A_+$ and decrease upper threshold $B=B*B_-$
+    \EndIf
+\EndIf
+
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Implementation Details}
+
+Below the table with the parameters used can be found:
+
+\begin{table}[!ht]
+%\centering
+\hspace{-13mm}
+\begin{tabular}{|l|llllllllllllll|}
+\cline{1-15}
+ parameter & $m$ & $A$   & $B$   & $A_-$ & $A_+$ & $B_-$ & $B_+$ & $\gamma_L$ & $\gamma_\sigma$ & $r$  & $\rho$ & $k$ & $maxiter$ & $\varepsilon$\\ \cline{1-15}
+ value & $5$ & $0.1$ & $0.9$ & $0.95$ & $1.02$ & $0.98$ & $1.01$ & $0.9$ & $0.9$ & $10$ & $0.01$ & $50$ & $10000$ & $10^{-8}$            \\ \cline{1-15}
+\end{tabular}
+\caption[Table of the parameters.]{Table of the parameters used in \ref{ASHGF} and \ref{ASHGFSubroutine}.}
+\end{table}
+
+The strength of this algorithm lies also in the fact that varying these parameters, keep almost the same performance on average, with some fluctuations depending on the function that is to be optimised.
+
+\section{Theoretical Results}
+
+\subsection{Background notions and results}
+
+In this section the theoretical background needed in order to prove convergence results for the algorithm is presented.
+
+\begin{defn}[Lipschitz Continuos Gradient]\label{LipschitzContinousGradient}
+Let $F\in\mathcal{C}^1 (\mathbb{R})$. $F$ has Lipschitz Continuos Gradient if there exists $L>0$ such that $\norm{\nabla F(x+\xi) - \nabla F(x)} \leq L \norm{\xi}$, $\forall x, \xi \in \mathbb{R}^d$.
+\end{defn}
+
+\begin{defn}[Strong Convexity]
+Let $F\in\mathcal{C}^1 (\mathbb{R}^d)$. $F$ is a strongly convex function if there exists a positive number $\tau$ such that $\forall x, \xi \in \mathbb{R}^{d}, F(x+\xi) \geq F(x)+\langle\nabla F(x), \xi\rangle+\frac{\tau}{2}\|\xi\|^{2}$. $\tau$ is called the convexity parameter of $F$.
+\end{defn}
+
+\begin{thm}[Gauss-Hermite quadrature error]\label{GHError}
+
+Let $\widetilde{\mathcal{D}}^{M}$ and $\mathcal{D}$ as in \ref{GHApproximationSmothedSection} and \ref{DerivativeSmoothingSection}, respectively. Then the error of the one-dimensional GH quadrature is
+
+\begin{equation}\label{BoundErrorGHEq}
+\left|\left(\widetilde{\mathcal{D}}^{M}-\mathcal{D}\right)\left[G_{\sigma}\right]\right| \leq C \frac{M ! \sqrt{\pi}}{2^{M}(2 M) !} \sigma^{2 M-1},   
+\end{equation}
+
+with $C>0$ a constant independent of $M$ and $\sigma$.
+
+\end{thm}
+
+\begin{prop}[Lemma 3 - \cite{nesterov2017random}]\label{PrimoLemmaNesterov}
+If $ F $ ha Lipschitz Continuos Gradient with constant $ L $, then
+
+\begin{equation}
+\left\|\nabla F_{\sigma}(x)-\nabla F(x)\right\| \leq \frac{\sigma}{2} L(d+3)^{3 / 2}
+\end{equation}
+
+For $ F \in C^{2}(\mathbb{R}^d) $ such that $\norm{\nabla^2 F(x+\xi) - \nabla^2 F(x)} \leq L \norm{\xi}$, $\forall x, \xi \in \mathbb{R}^d$ with constant $ L $, we can guarantee that
+
+\begin{equation}
+\left\|\nabla F_{\sigma}(x)-\nabla F(x)\right\| \leq \frac{\sigma^{2}}{6} L(d+4)^{2}
+\end{equation}
+
+\end{prop}
+
+\begin{prop}[Theorem 2.1.5 - \cite{NesterovBookIntroductory}]\label{TeoremaNesterov}
+Let $ x, y \in R^{n} $ and $ \alpha \in [0,1] $. The following expressions are equivalent to say that $F$ has Lipschitz Continous Gradient:
+
+\begin{equation}\label{FirstLipContGradEquivalence}
+0 \leq F(y)-F(x)-\left\langle F^{\prime}(x), y-x\right\rangle \leq \frac{L}{2}\norm{x-y}^{2},
+\end{equation}
+
+\begin{equation}
+F(x)+\left\langle F^{\prime}(x), y-x\right\rangle+\frac{1}{2 L}\norm{F^{\prime}(x)-F^{\prime}(y)^{2}} \leq F(y),    
+\end{equation}
+
+\begin{equation}
+\frac{1}{L}\norm{F^{\prime}(x)-F^{\prime}(y)}^{2} \leq\left\langle F^{\prime}(x)-F^{\prime}(y), x-y\right\rangle,    
+\end{equation}
+
+\begin{equation}
+\left\langle F^{\prime}(x)-F^{\prime}(y), x-y\right\rangle \leq L\norm{x-y}^{2},  
+\end{equation}
+
+\begin{equation}
+\alpha F(x)+(1-\alpha) F(y) \geq F(\alpha x+(1-\alpha) y) + \frac{\alpha(1-\alpha)}{2 L}\norm{F^{\prime}(x)-F^{\prime}(y)}^{2},   
+\end{equation}
+
+\begin{equation}
+\alpha F(x)+(1-\alpha) F(y) \leq F(\alpha x+(1-\alpha) y) +\alpha(1-\alpha) \frac{L}{2}\norm{x-y}^{2}.   
+\end{equation}
+
+\end{prop}
+
+\subsection{Convergence of the algorithm}
+
+A first result is a bound on the difference between $\nabla F$ and the DGS estimator.
+
+\begin{prop}\label{DGSEstimatorBound}
+
+Let $\Xi = \left(\xi_1,\dots,\xi_d\right)$ be a orthonormal basis of $\mathbb{R}^d$ and let $F$ have a Lipschitz Continous Gradient with constant $L$. Then
+
+\begin{equation}\label{BoundErrorEstimatorEq}
+ \left\|\widetilde{\nabla}_{\sigma, \Xi}^{M}[F](x)-\nabla F(x)\right\|^{2} \leq \frac{2 C^{2} \pi d(M !)^{2}}{4^{M}((2 M) !)^{2}} \sigma^{4 M-2}+32 d L^{2} \sigma^{2} 
+\end{equation}
+
+\end{prop}
+
+\begin{proof}
+
+First, adapting \ref{PrimoLemmaNesterov} to $1-$dimensional Gaussian smoothing, for any $ \xi $ being a unit vector in $ \mathbb{R}^{d} $, there holds
+
+\begin{equation}\label{BoundOnErrorGradientSmoothingSectionEq}
+\left|\mathcal{D}\left[G_{\sigma}(0 \mid x, \xi)\right]-\nabla_{\xi} F(x)\right| \leq 4 \sigma L,
+\end{equation}
+
+where $d=1$, being a $1-$dimensional Gaussian smoothing.
+
+From (\ref{BoundErrorGHEq}) and (\ref{BoundOnErrorGradientSmoothingSectionEq}), we have
+
+\begin{equation}\label{BoundOnErrorEstimationGradientSmoothingSectionEq}
+ \begin{aligned}\left|\widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x, \xi_{i}\right)\right]-\nabla_{\xi_{i}} F(x)\right|^{2} & \leq 2\left|\left(\widetilde{\mathcal{D}}^{M}-\mathcal{D}\right)\left[G_{\sigma}\right]\right|^{2}+2\left|\mathcal{D}\left[G_{\sigma}\right]-\nabla_{\xi_{i}} F(x)\right|^{2} \\ & \leq \frac{2 C^{2}(M !)^{2} \pi}{4^{M}((2 M) !)^{2}} \sigma^{4 M-2}+32 \sigma^{2} L^{2}, \forall i \in\{1, \ldots, d\} \end{aligned} 
+\end{equation}
+
+Summing \ref{BoundOnErrorEstimationGradientSmoothingSectionEq} from $ i=1 $ to $ d $, given that the bound does not depend on $i$, gives \ref{BoundErrorEstimatorEq}.
+
+\end{proof}
+
+The next result aims to give a bound on the difference in the value of the function at an iteration $t$ with respect to its global minima. For the following results the stepsize $\lambda$ and the smoothing parameter $\sigma$ are assumed to be constant.
+
+\begin{thm}[Bound on the descent]\label{DescentBoundThm}
+
+Let $ F $ be a strongly convex function with Lipschitz Continuos Gradient, $L$ being its Lipschitz constant, $x^*$ the global minimizer of $ F $ and the sequence $ \left\{x_{t}\right\}_{t \geq 0} $ be generated by Algorithm \ref{ASHGF} with $ \lambda=\frac{1}{8L} $. Then, for any $ t \geq 0 $,
+
+\begin{equation}\label{DescentBoundEq}
+F\left(x_{t}\right)-F\left(x^{*}\right) \leq \frac{1}{2} L\left[\delta_{\sigma}+\left(1-\frac{\tau}{16 L}\right)^{t}\left(\left\|x_{0}-x^{*}\right\|^{2}-\delta_{\sigma}\right)\right] .
+\end{equation}
+
+Here,
+
+\begin{equation}\label{DescentBoundThmThings}
+\delta_{\sigma}=\left(\frac{128}{\tau^{2}}+\frac{16}{\tau L}\right) L^{2} d \sigma^{2}+\left(\frac{8}{\tau^{2}}+\frac{1}{2 \tau L}\right) \frac{C^{2}(M !)^{2} \pi d}{4^{M}((2 M) !)^{2}} \sigma^{2} .
+\end{equation}
+
+\end{thm}
+
+\begin{proof}
+
+Firstly, let's find an upper bound for $\left\|\widetilde{\nabla}_{\sigma, \Xi}^{M}[F](x)\right\|$. Recall that
+
+\begin{equation}\label{BoundDGSEStimatorSquaredEq}
+\left\|\widetilde{\nabla}_{\sigma, \Xi}^{M}[F](x)\right\|^{2} = \sum_{i=1}^d \left|\widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x, \xi_{i}\right)\right]\right|^{2}.
+\end{equation}
+
+Each term of the sum defined above can be bounded as
+
+\begin{equation}\label{BoundOnErrorEstimationGradientSmoothingSectionEq2}
+ \begin{aligned}
+ \left|\widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x, \xi_{i}\right)\right]\right|^{2} 
+ & =  \left|\widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x, \xi_{i}\right)\right] - 0 \right|^{2} \\
+ & \leq  2\left|\widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x, \xi_{i}\right)\right] - \mathcal{D}\left[G_{\sigma}\left(0 \mid x, \xi_{i}\right)\right] \right|^{2} + \\ & \quad 2\left|\widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x, \xi_{i}\right)\right] - 0 \right|^{2} \\
+ & = 2\left|\widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x, \xi_{i}\right)\right] - \mathcal{D}\left[G_{\sigma}\left(0 \mid x, \xi_{i}\right)\right] \right|^{2} + \\ & \quad 2\left|\widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x, \xi_{i}\right)\right] \right|^{2} \\
+ & \leq \frac{2 C^{2}(M !)^{2} \pi}{4^{M}((2 M) !)^{2}} \sigma^{4 M-2} + 4\left|\widetilde{\mathcal{D}}^{M}\left[G_{\sigma}\left(0 \mid x, \xi_{i}\right)\right] - \nabla_{\xi_{i}} F(x) \right|^{2} + \\ & \quad 4\left|\nabla_{\xi_{i}} F(x)\right|^{2} \\
+ & \leq \frac{2 C^{2}(M !)^{2} \pi}{4^{M}((2 M) !)^{2}} \sigma^{4 M-2} + 64\sigma^2 L^2 + 4\left|\nabla_{\xi_{i}} F(x)\right|^{2},
+ \end{aligned} 
+\end{equation}
+
+where (\ref{BoundOnErrorGradientSmoothingSectionEq}) and (\ref{BoundErrorGHEq}) were used. This bound can then used in (\ref{BoundDGSEStimatorSquaredEq}), in order to obtain
+
+\begin{equation}\label{BoundDGSEStimatorSquaredEq2}
+ \left\|\widetilde{\nabla}_{\sigma, \Xi}^{M}[F](x)\right\|^{2} \leq \frac{2 C^{2}(M !)^{2} d \pi}{4^{M}((2 M) !)^{2}} \sigma^{4 M-2} + 4 \sum_{i=1}^{d}\left|\nabla_{\xi_{i}} F(x)\right|^{2} +  64 d \sigma^2 L^2.
+\end{equation}
+
+Now, let's define that $r_t = \norm{x_t - x^*}$. Then
+
+\begin{equation}\label{DifferenceIterationMinimizerEq1}
+ \begin{aligned} 
+ r_{t+1}^{2}
+ & = \norm{x_{t}-\lambda \widetilde{\nabla}_{\sigma, \Xi}^{M} [F]\left(x_{t}\right)-x^{*}}^{2} \\
+ & = r_{t}^{2}-2 \lambda\left\langle\widetilde{\nabla}_{\sigma, \Xi}^{M}[F]\left(x_{t}\right), x_{t}-x^{*}\right\rangle+\lambda^{2}\norm{\tilde{\nabla}_{\sigma, \Xi}^{M}[F]\left(x_{t}\right)}^{2} \\ 
+ & \stackrel{(\ref{BoundDGSEStimatorSquaredEq2})}{\leq} r_{t}^{2}-2 \lambda\left\langle\widetilde{\nabla}_{\sigma, \Xi}^{M}[F]\left(x_{t}\right)-\nabla F\left(x_{t}\right), x_{t}-x^{*}\right\rangle-2 \lambda\left\langle\nabla F\left(x_{t}\right), x_{t}-x^{*}\right\rangle \\ 
+ & +4 \lambda^{2} \sum_{i=1}^{d}\left|\nabla_{\xi_{i}} F\left(x_{t}\right)\right|^{2}+64 \lambda^{2} L^{2} d \sigma^{2}+\frac{2 C^{2} \lambda^{2}(M !)^{2} \pi d}{4^{M}((2 M) !)^{2}} \sigma^{4 M-2}. 
+ \end{aligned} 
+\end{equation}
+
+Now, the aim is to bound the right side of (\ref{DifferenceIterationMinimizerEq1}). Given the strong convexity of $F$, 
+
+\begin{equation}
+ -2 \lambda\left\langle\nabla F\left(x_{t}\right), x_{t}-x^{*}\right\rangle \leq 2 \lambda F\left(x^{*}\right)-2 \lambda F\left(x_{t}\right)-\lambda \tau\left\|x^{*}-x_{t}\right\|^{2} . 
+\end{equation}
+
+Now, given that
+
+\begin{equation*}
+	(a+b)\cdot (a+b)=\|a\|^2+2a\cdot b+\|b\|^2 \geq 0 \Longrightarrow  \|a\|^2+\|b\|^2 \geq -2a\cdot b,
+\end{equation*}
+
+then it holds:
+
+\begin{equation}
+ \begin{aligned} 
+ & -2 \lambda\left\langle\tilde{\nabla}_{\sigma, \Xi}^{M}[F]\left(x_{t}\right)-\nabla F\left(x_{t}\right), x_{t}-x^{*}\right\rangle \\ 
+ & \leq \frac{2 \lambda}{\tau}\norm{\widetilde{\nabla}_{\sigma, \Xi}^{M}[F]\left(x_{t}\right)-\nabla F\left(x_{t}\right)}^{2}+\frac{\lambda \tau}{2}\norm{x_{t}-x^{*}}^{2} \\ 
+ & \stackrel{\text { (\ref{BoundErrorEstimatorEq}) }}{\leq} \frac{4 \lambda}{\tau} \cdot \frac{C^{2} \pi d(M !)^{2}}{4^{M}((2 M) !)^{2}} \sigma^{4 M-2}+\frac{64 \lambda}{\tau} L^{2} d \sigma^{2}+\frac{\lambda \tau}{2}\norm{x_{t}-x^{*}}^{2}.
+ \end{aligned} 
+\end{equation}
+
+Using a bound for functions with Lipschitz Continuos Gradients from \ref{TeoremaNesterov}, it gives
+
+\begin{equation}\label{BoundSumModulesEq}
+ 4 \lambda^{2} \sum_{i=1}^{d}\left|\nabla_{\xi_{i}} F\left(x_{t}\right)\right|^{2}=4 \lambda^{2}\left\|\nabla F\left(x_{t}\right)\right\|^{2} \leq 8 \lambda^{2} L\left(F\left(x_{t}\right)-F\left(x^{*}\right)\right) . 
+\end{equation}
+
+Now, joining (\ref{DifferenceIterationMinimizerEq1}) and (\ref{BoundSumModulesEq}), it holds
+
+\begin{equation}\label{FirstRecursiveIneq}
+ \begin{aligned} 
+ r_{t+1}^{2} 
+ & \leq r_{t}^{2}-\left(2 \lambda-8 \lambda^{2} L\right)\left(F\left(x_{t}\right)-F\left(x^{*}\right)\right) \\ 
+ & +\left(\frac{64 \lambda}{\tau}+64 \lambda^{2}\right) L^{2} d \sigma^{2}+\left(\frac{4 \lambda}{\tau}+2 \lambda^{2}\right) \frac{C^{2}(M !)^{2} \pi d}{4^{M}((2 M) !)^{2}} \sigma^{4 M-2}. 
+ \end{aligned} 
+\end{equation}
+
+Given the strong convexity of $F$ and that $\lambda^*=\frac{1}{8L}$ is the maximum for $8\lambda^2 L - 2 \lambda$, we have that
+
+\begin{equation}\label{BoundFromStrongConvexity}
+	-\left(2 \lambda-8 \lambda^{2} L\right)\left(F\left(x_{t}\right)-F\left(\boldsymbol{x}^{*}\right)\right) \leq \frac{\tau}{16 L}\left\|x_{t}-x^{*}\right\|^{2} 
+\end{equation}
+
+Let's now assume that $\sigma < 1$. Then, from (\ref{FirstRecursiveIneq}), (\ref{BoundFromStrongConvexity}) and (\ref{DescentBoundThmThings}), holds that
+
+\begin{equation}
+	r_{t+1}^{2}-\delta_{\sigma} \leq\left(1-\frac{\tau}{16 L}\right)\left(r_{t}^{2}-\delta_{\sigma}\right), 
+\end{equation}
+
+which gives
+
+\begin{equation}
+	r_{t}^{2}-\delta_{\sigma} \leq\left(1-\frac{\tau}{16 L}\right)^{t}\left(r_{0}^{2}-\delta_{\sigma}\right) . 
+\end{equation}
+
+Now, since for $F$ holds \( F\left(x_{t}\right)-F\left(x^{*}\right) \leq \frac{1}{2} L\left\|x_{t}-x^{*}\right\|^{2} \), because of (\ref{FirstLipContGradEquivalence}), the conclusion is achieved.
+
+\end{proof}
+
+Thanks to the theorem above, it can be proved the global linear rate of convergence with ASHGF, which is to be expected in the case of strongly convex functions. In order to prove it, let $\varepsilon >0$. Then to guarantee $ F\left(x_{t}\right)-F\left(x^{*}\right) \leq \varepsilon $, the smoothing parameter has to be such that $\sigma \leq O\left(\sqrt{\frac{\varepsilon}{d}}\right)$ and the number of iterations have to be $t = O(\log\frac{1}{\varepsilon})$, which yields the result.
+
+It is relevant to note that the number of iterations required by Algorithm \ref{ASHGF} is independent of the dimensionality of the problem considered.

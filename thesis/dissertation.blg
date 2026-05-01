@@ -1,0 +1,63 @@
+This is BibTeX, Version 0.99d (TeX Live 2021/W32TeX)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: dissertation.aux
+The style file: IEEEtran.bst
+A level-1 auxiliary file: chapters/introduction.aux
+A level-1 auxiliary file: chapters/stateoftheartalgorithms.aux
+A level-1 auxiliary file: chapters/thealgorithm.aux
+A level-1 auxiliary file: chapters/numericalexperiments.aux
+A level-1 auxiliary file: chapters/conclusion.aux
+Reallocated singl_function (elt_size=4) to 100 items from 50.
+Reallocated singl_function (elt_size=4) to 100 items from 50.
+Reallocated singl_function (elt_size=4) to 100 items from 50.
+Reallocated wiz_functions (elt_size=4) to 6000 items from 3000.
+Reallocated singl_function (elt_size=4) to 100 items from 50.
+Database file #1: references.bib
+-- IEEEtran.bst version 1.14 (2015/08/26) by Michael Shell.
+-- http://www.michaelshell.org/tex/ieeetran/bibtex/
+-- See the "IEEEtran_bst_HOWTO.pdf" manual for usage information.
+Warning--empty journal in Dereventsov2020
+
+Done.
+You've used 23 entries,
+            4087 wiz_defined-function locations,
+            974 strings with 11600 characters,
+and the built_in function-call counts, 17281 in all, are:
+= -- 1438
+> -- 401
+< -- 155
++ -- 222
+- -- 67
+* -- 834
+:= -- 2626
+add.period$ -- 46
+call.type$ -- 23
+change.case$ -- 22
+chr.to.int$ -- 342
+cite$ -- 24
+duplicate$ -- 1240
+empty$ -- 1302
+format.name$ -- 86
+if$ -- 4008
+int.to.chr$ -- 0
+int.to.str$ -- 23
+missing$ -- 206
+newline$ -- 100
+num.names$ -- 23
+pop$ -- 452
+preamble$ -- 1
+purify$ -- 0
+quote$ -- 2
+skip$ -- 1350
+stack$ -- 0
+substring$ -- 826
+swap$ -- 1037
+text.length$ -- 41
+text.prefix$ -- 0
+top$ -- 5
+type$ -- 23
+warning$ -- 1
+while$ -- 77
+width$ -- 25
+write$ -- 253
+(There was 1 warning)

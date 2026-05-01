@@ -1,0 +1,80 @@
+%!TEX root = ../dissertation.tex
+% !TeX spellcheck = en_GB 
+
+\chapter{Introduction}\label{introduction}
+
+\section{Historical Introduction}
+
+In recent years, starting from the advance of robotics \cite{Theodorou2010}, \cite{Ruckstieß2010},  and then the popularization and spread of machine learning, the need for affordable and powerful algorithms able to optimize function without the need to compute their derivative has increased. These kind of algorithms trace back to the 1970s, with the definition of the Nelder-Mead strategy \cite{NelderMead}, and since then this field has been largely expanded and developed.
+
+The paths taken by the literature are various: 
+
+\begin{itemize}
+	
+    \item Zeroth-order algorithms: a branch of optimization focused on the study of algorithms that mimics first order methods. These algorithms implement the same structure adopted in their first order counterpart and, instead of computing the gradient and use it as descent direction, an estimation of the gradient is used. Relevant examples of this commitment are the work from Nesterov \cite{nesterov2017random}, who laid the theoretical ground for further works i.e. the use of Gaussian Smoothing to estimate the gradient of the function to be optimized, the adaptation to the Zeroth-order framework of the stochastic gradient descent \cite{Ghadimi2013}, stochastic variance reduction \cite{Liu2018a}, the largely used algorithm in deep learning AdaMM \cite{Chen2019};
+    \item Evolution Strategies: this branch focuses on the idea of evolution strategy, of which a prime example is CMA-ES \cite{542381}. This kind of research converged, de facto, into algorithms, of which the one presented in this thesis is an example, which are somehow related to random searches and Nesterov's algorithm. The connection with Zeroth-order algorithm is now becoming increasingly clear thanks to the use of the Gaussian Smoothing technique to compute a descent direction.
+    \item Derivative-Free Optimization: A large number of algorithms and techniques fall into this class of methods. Depending on the problem that needed to be solved, various approaches were and are developed, like, e.g., directional direct-search methods \cite{Larson2019}, model-based methods \cite{10.1093/imanum/drn045, custódio_vicente_2007}.
+    
+\end{itemize}
+%REFRASE
+The method presented in this work does not use the usual techniques studied in the Zeroth-order literature; thus it is to be categorised as an Evolution Strategy. It implements a peculiar way of choosing the descent directions, a different way to estimate the gradient and adaptivity of some hyperparameters. Relevant works associated with this one are the algorithms SGES \cite{Liu2020a} and ASGF \cite{Dereventsov2020}.
+% This work falls in the second category, being, from a Zeroth-order point of view, a random search as described by Nesterov, but, in the Evolution Strategy fashion, with a peculiar way of choosing the descent directions, a different way to estimate the gradient and adaptivity of some hyperparameters. Relevant works associated to this one are the algorithms SGES \cite{Liu2020a} and ASGF \cite{Dereventsov2020}.
+In fact, in ASGF the authors proposed an algorithm that uses:
+
+\begin{itemize}
+	
+    \item Alternative gradient estimation method: this substitutes a $d-$dimensional Gaussian Smoothing with $d$ $1-$dimensional Gaussian Smoothing;
+    \item The use of a random orthonormal basis of the space in which the first direction is the direction of estimated gradient at the previous iteration;
+    \item The adaptivity of smoothing parameter and learning rate.
+    
+\end{itemize}
+%REFRASE
+The relevance of SGES is given by the way in which it uses previously estimated gradients: 
+\begin{itemize}
+	\item it keeps track of the last $k$ estimated gradients and uses them to influence the choice of some of the directions used to estimate the gradient in the following iteration;
+	\item at each iteration it adapts the number of directions to be influenced by previously estimated gradients.
+\end{itemize}
+%While SGES is relevant for its idea of keeping track of the last $k$ gradients in order to use them to influence the choice of some of the directions along which the gradient has to be estimated, with the quantity of said influenced directions being adapted at each iteration.
+
+\section{Problem Definition}
+
+\subsection{Black-Box optimization}
+
+The general problem that the algorithm aims to solve is the one of finding global minima for a high-dimensional nonconvex objective function $F: \mathbb{R}^{d} \rightarrow \mathbb{R}$. Here is considered the unconstrained black-box optimization problem, parameterized by a $d$ -dimensional vector $x=\left(x_{1}, \ldots, x_{d}\right) \in \mathbb{R}^{d}$, i.e.,
+
+\begin{equation}\label{problem}  
+    \min _{x \in \mathbb{R}^{d}} F(x)  
+\end{equation}
+
+$F(x)$ is assumed to be of black-box type, and the gradient $\nabla F(x)$ is inaccessible, thus (\ref{problem}) is typically solved with a derivative- or gradient-free optimization method. Such a function will be defined as a black-box function.
+
+\subsection{Reinforcement Learning problem}
+
+The reinforcement learning problem is meant to frame a problem in which to achieve a goal an agent learns from interaction with the environment. Here we call an agent the learner and decision-maker, while we denominate the environment everything outside of the agent. More specifically here the problem is considered as an episodic problem, as defined in \cite{SuttonBarto}.
+
+The cycle of learning is characterized by a sequence of discrete time steps, $t=0,1,2,3,\dots$, where at each time $t$, the state $S_t\in S$ ($S$ set of all possible states), a representation of the environment at time step $t$, is given to the agent, who, depending on the state, chooses an action $A_t\in A(S_t)$ ($A(S_t)$ set of all actions available in step $S_t$). At the next step a reward $R_{t+1}\in R \subset \mathbb{R}$ and the new state of the environment are given to the agent. Note that the reward is stochastic in the sense that the agent does not always face the same problem within the same environment because the latter presents always random differences (think for example at the fact that when playing chess no play is the same as the one before that).
+
+The choice of the action is done through a mapping of the state to probabilities of selecting each possible action. Such mapping is called a policy and is written as $\pi_t$, with $\pi_t (a|s)$ is the probability of choosing action a if at state t.
+
+The goal of the agent is to maximize the total amount of reward received in the long run.
+
+\subsubsection{Reinforcement Learning via black-box oracle}
+
+When solving Reinforcement Learning problem, given $\pi_x : \mathbb{R}^d \rightarrow \mathbb{R}^p$ a policy parametrized by $x$, the average total reward of a given policy $ \mathbb{E}_{\xi}\left[r\left(\pi_x, \xi\right)\right]$, whose maximization is the main goal, can be seen as a black-box function $F(x)$, hence the problem can be written as:
+
+\begin{equation}\label{problem_rl}  
+    \max _{x \in \mathbb{R}^{d}} \mathbb{E}_{\xi}\left[r\left(\pi_x, \xi\right)\right] = \max _{x \in \mathbb{R}^{d}} F(x)
+\end{equation}
+
+Through this interpretation of the problem, the algorithm is concerned with only the result of a whole episode, treating the function as a black-box oracle.
+%REFRASE
+This approach to the solution of reinforcement learning problems is not a novel idea. As \cite{Theodorou2010} points out, reinforcement learning algorithms evolved during the years showing increasing similarities with evolution strategies. This in turns reflects the abandonment of the classical framework of reinforcement learning problems and the adoption of the concept of black-box oracle.
+
+% This approach is not new and is also well studied. As it can be seen in \cite{Theodorou2010}, the evolution of reinforcement learning algorithms can be seen as the shift of paradigm from solving the problems in the classical framework to the framework of the Evolution strategies, which in turns reflects the use of the concept of black-box oracle.
+
+
+\section{Aim of this work}
+
+The aim of this work is to take the idea of SGES and insert it into the framework of ASGF, specifically changing the update of the orthonormal basis, which will have a number of directions dependent on the previous gradients that will be adapted during the execution of the algorithm.
+
+Then the algorithm is tested against some state-of-the-art algorithms on a suit of challenging functions taken from \cite{simulationlib} and \cite{andrei2008unconstrained}, and on some Reinforcement Learning problems taken from \cite{openai}.
