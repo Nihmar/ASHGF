@@ -17,6 +17,48 @@ Gaussian smoothing and directional derivative estimation.
 
 ## Installation
 
+Requires **Python 3.10+**.
+
+### Recommended: `uv` (virtual environment isolato)
+
+[`uv`](https://docs.astral.sh/uv/) è un package manager veloce scritto in Rust che gestisce
+ambienti virtuali e dipendenze senza toccare i pacchetti di sistema.
+
+```bash
+# Installa uv (se non presente)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clona il repository
+git clone <repo-url> && cd ASHGF
+
+# Crea l'ambiente virtuale e installa le dipendenze core
+uv sync
+
+# Con dipendenze di sviluppo (test)
+uv sync --group dev
+
+# Con supporto RL (gymnasium)
+uv sync --group rl
+
+# Tutto insieme
+uv sync --group dev --group rl
+```
+
+Dopo `uv sync`, tutti i comandi vanno prefixati con `uv run`:
+
+```bash
+uv run pytest tests/ -v
+uv run python -m ashgf run --algo ashgf --function sphere --dim 100 --iter 10000
+```
+
+L'ambiente virtuale si trova in `.venv/`. Per attivare la shell manualmente:
+
+```bash
+source .venv/bin/activate
+```
+
+### Alternativa: `pip` tradizionale
+
 ```bash
 # Basic installation
 pip install -e .
@@ -31,8 +73,6 @@ pip install -e ".[rl]"
 pip install -e ".[all]"
 ```
 
-Requires **Python 3.10+**.
-
 ## Quick Start
 
 ```python
@@ -41,34 +81,48 @@ from ashgf.functions import get_function
 
 f = get_function("sphere")
 algo = ASHGF(seed=42)
+# optimize restituisce (best_values, all_values)
+# best_values: list[(x, f(x))] — migliori punti trovati
+# all_values:  list[float]        — valore di f a ogni iterazione
 best_values, all_values = algo.optimize(f, dim=100, max_iter=1000)
 
 print(f"Final value: {all_values[-1]:.6e}")
 ```
 
+Eseguire lo script con `uv run`:
+
+```bash
+uv run python quickstart.py
+```
+
 ## CLI Usage
 
 ```bash
-# Run an algorithm
+# Con uv (prefisso uv run)
+uv run python -m ashgf run --algo ashgf --function sphere --dim 100 --iter 10000
+uv run python -m ashgf list
+uv run python -m ashgf compare --algos gd,sges,asgf,ashgf --function rastrigin --dim 50
+
+# Oppure usa lo script entry point (dopo uv sync)
+uv run ashgf run --algo ashgf --function sphere --dim 100 --iter 10000
+
+# Con venv attivato
+source .venv/bin/activate
 python -m ashgf run --algo ashgf --function sphere --dim 100 --iter 10000
-
-# List available functions
-python -m ashgf list
-
-# Compare algorithms
-python -m ashgf compare --algos gd,sges,asgf,ashgf --function rastrigin --dim 50
 ```
 
 ## Running Tests
 
 ```bash
-# All tests
+# Con uv
+uv run pytest tests/ -v
+uv run pytest tests/ -v -m "not slow"
+uv run pytest tests/ --cov=ashgf --cov-report=html
+
+# Con venv attivato
+source .venv/bin/activate
 pytest tests/ -v
-
-# Fast tests only (skip slow integration tests)
 pytest tests/ -v -m "not slow"
-
-# With coverage
 pytest tests/ --cov=ashgf --cov-report=html
 ```
 

@@ -1,6 +1,15 @@
 [build-system]
 requires = ["setuptools>=64", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+rl = [
+    "gymnasium>=0.29",
+]
 
 [project]
 name = "ashgf"
