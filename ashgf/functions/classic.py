@@ -42,7 +42,7 @@ def sphere(x: np.ndarray) -> float:
     float
         Function value.
     """
-    return float(x.T @ x)
+    return float(np.dot(x, x))
 
 
 def rastrigin(x: np.ndarray) -> float:
@@ -98,6 +98,7 @@ def ackley(x: np.ndarray) -> float:
     b: float = 0.2
     c: float = 2.0 * math.pi
 
+    n = len(x)
     term_1: float = -a * np.exp(-b * np.sqrt(np.mean(x**2)))
     term_2: float = -np.exp(np.mean(np.cos(c * x)))
     term_3: float = a + math.e
@@ -272,8 +273,10 @@ def zakharov(x: np.ndarray) -> float:
         Function value.
     """
     n: int = len(x)
+    i = np.arange(1, n + 1)
+    half_sum = 0.5 * np.sum(i * x)
     term_1: float = float(np.sum(x**2))
-    term_2: float = float((0.5 * np.sum(np.arange(1, n + 1) * x)) ** 2)
+    term_2: float = float(half_sum**2)
     term_3: float = float(term_2**2)
     return float(term_1 + term_2 + term_3)
 
@@ -375,8 +378,6 @@ def relu(x: np.ndarray) -> np.ndarray:
 
         \mathrm{ReLU}(x_i) = \max(0, x_i)
 
-    Implemented as :math:`|x| \cdot \mathbb{1}_{x > 0}`.
-
     Parameters
     ----------
     x : np.ndarray
@@ -387,7 +388,7 @@ def relu(x: np.ndarray) -> np.ndarray:
     np.ndarray
         Array of the same shape as ``x`` with the ReLU activation applied.
     """
-    return np.abs(x) * (x > 0)
+    return np.maximum(0, x)
 
 
 def softmax(x: np.ndarray) -> np.ndarray:
@@ -397,9 +398,10 @@ def softmax(x: np.ndarray) -> np.ndarray:
 
         \mathrm{softmax}(x_i) =
         \frac{e^{x_i - \max(\mathbf{x})}}
-             {\sum_{j} e^{x_j}}
+             {\sum_{j} e^{x_j - \max(\mathbf{x})}}
 
-    The subtraction of the maximum improves numerical stability.
+    The subtraction of the maximum improves numerical stability
+    and must be applied to both the numerator and the denominator.
 
     Parameters
     ----------
@@ -412,4 +414,4 @@ def softmax(x: np.ndarray) -> np.ndarray:
         Softmax probabilities (same shape as ``x``, summing to 1).
     """
     y: np.ndarray = np.exp(x - np.max(x))
-    return y / np.sum(np.exp(x))
+    return y / np.sum(y)

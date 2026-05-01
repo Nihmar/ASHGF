@@ -387,7 +387,7 @@ def bdqrtic(x: np.ndarray) -> float:
         f(\mathbf{x}) = \sum_{i=1}^{n-3}
             \bigl[(-4x_i + 3)^2 + \bigl(
                 x_i^2 + 2x_{i+1}^2 + 3x_{i+2}^2 + 4x_{i+3}^2
-                + 5x_n\bigr)^2\bigr]
+                + 5x_n^2\bigr)^2\bigr]
 
     Parameters
     ----------
@@ -402,7 +402,7 @@ def bdqrtic(x: np.ndarray) -> float:
     term_1 = (-4.0 * x[:-3] + 3.0) ** 2
     x_sq = x**2
     term_2 = (
-        x_sq[:-3] + 2.0 * x_sq[1:-2] + 3.0 * x_sq[2:-1] + 4.0 * x_sq[3:] + 5.0 * x[-1]
+        x_sq[:-3] + 2.0 * x_sq[1:-2] + 3.0 * x_sq[2:-1] + 4.0 * x_sq[3:] + 5.0 * x_sq[-1]
     ) ** 2
     return float(np.sum(term_1 + term_2))
 

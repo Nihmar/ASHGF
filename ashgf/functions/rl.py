@@ -45,7 +45,7 @@ def _relu(x: np.ndarray) -> np.ndarray:
 
     .. math::
 
-        \\operatorname{ReLU}(z) = \\max(0, z) = |z| \\cdot \\mathbf{1}_{z > 0}
+        \\operatorname{ReLU}(z) = \\max(0, z)
 
     Parameters
     ----------
@@ -57,7 +57,7 @@ def _relu(x: np.ndarray) -> np.ndarray:
     np.ndarray
         Element-wise ReLU of ``x``.
     """
-    return np.abs(x) * (x > 0)
+    return np.maximum(0, x)
 
 
 def _get_gym_module() -> tuple[object, str]:
