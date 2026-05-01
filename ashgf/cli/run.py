@@ -10,7 +10,11 @@ from ashgf import __version__
 from ashgf.algorithms import ASEBO, ASGF, ASHGF, GD, SGES
 from ashgf.benchmark import (
     benchmark,
+    benchmark_multi,
+    plot_benchmark_comparison,
+    plot_convergence_grid,
     plot_statistics,
+    print_benchmark_multi_summary,
     print_benchmark_summary,
     print_statistics_summary,
     statistics,
@@ -27,6 +31,11 @@ ALGORITHMS = {
     "ashgf": ASHGF,
     "asebo": ASEBO,
 }
+
+
+def _parse_dims(dims_str: str) -> list[int]:
+    """Parse a comma-separated list of dimensions."""
+    return [int(d.strip()) for d in dims_str.split(",")]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -111,7 +120,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Only include functions matching this substring (case-insensitive)",
     )
-    bench_parser.add_argument("--dim", type=int, default=100, help="Problem dimension")
+    bench_parser.add_argument(
+        "--dim", type=int, default=None, help="Single dimension (default: 100)"
+    )
+    bench_parser.add_argument(
+        "--dims",
+        type=str,
+        default=None,
+        help="Comma-separated dimensions, e.g. '10,100,1000' "
+        "(overrides --dim, enables multi-dim benchmark)",
+    )
     bench_parser.add_argument(
         "--iter",
         type=int,
@@ -133,6 +151,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default=None,
         help="Output directory for CSV results",
+    )
+    bench_parser.add_argument(
+        "--plot",
+        default=None,
+        help="Save comparison bar chart to this file path",
+    )
+    bench_parser.add_argument(
+        "--plot-convergence",
+        default=None,
+        dest="plot_conv",
+        help="Save convergence grid plot to this file path",
     )
     bench_parser.add_argument(
         "--quiet", action="store_true", help="Suppress per-run output"
@@ -250,23 +279,53 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "benchmark":
-        algos = args.algos  # may be None → default to all
+        algos = args.algos
         if algos is not None:
-            # Convert CLI keys (gd, sges, ...) to benchmark keys (GD, SGES, ...)
             algos = [a.upper() for a in algos]
 
-        results = benchmark(
-            algorithms=algos,
-            dim=args.dim,
-            max_iter=args.max_iter,
-            seed=args.seed,
-            lr=args.lr,
-            sigma=args.sigma,
-            output_dir=args.output,
-            debug=not quiet,
-            pattern=args.pattern,
-        )
-        print_benchmark_summary(results)
+        # Determine whether single-dim or multi-dim
+        if args.dims is not None:
+            # Multi-dimension benchmark
+            dims = _parse_dims(args.dims)
+            results = benchmark_multi(
+                algorithms=algos,
+                dims=dims,
+                max_iter=args.max_iter,
+                seed=args.seed,
+                lr=args.lr,
+                sigma=args.sigma,
+                output_dir=args.output,
+                debug=not quiet,
+                pattern=args.pattern,
+            )
+            print_benchmark_multi_summary(results)
+
+            if args.plot:
+                plot_benchmark_comparison(results, output_path=args.plot, show=False)
+            if args.plot_conv:
+                plot_convergence_grid(results, output_path=args.plot_conv, show=False)
+        else:
+            # Single-dimension benchmark
+            dim = args.dim if args.dim is not None else 100
+            results = benchmark(
+                algorithms=algos,
+                dim=dim,
+                max_iter=args.max_iter,
+                seed=args.seed,
+                lr=args.lr,
+                sigma=args.sigma,
+                output_dir=args.output,
+                debug=not quiet,
+                pattern=args.pattern,
+            )
+            print_benchmark_summary(results)
+
+            # For single dim, plot_convergence_grid can't work well
+            # but plot_benchmark_comparison can with a wrapper
+            if args.plot:
+                wrapped = {dim: results}
+                plot_benchmark_comparison(wrapped, output_path=args.plot, show=False)
+
         return 0
 
     if args.command == "stats":

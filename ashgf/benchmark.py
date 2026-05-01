@@ -457,3 +457,242 @@ def plot_statistics(
         plt.show()
     else:
         plt.close(fig)
+# Appended to benchmark.py
+
+# ---------------------------------------------------------------------------
+# Multi-dimension benchmark
+# ---------------------------------------------------------------------------
+
+
+def benchmark_multi(
+    functions: list[str] | None = None,
+    algorithms: list[str] | None = None,
+    dims: list[int] | None = None,
+    max_iter: int = 1000,
+    seed: int = 2003,
+    lr: float = DEFAULT_LR,
+    sigma: float = DEFAULT_SIGMA,
+    output_dir: str | None = None,
+    debug: bool = False,
+    pattern: str | None = None,
+) -> dict[int, dict[str, dict[str, dict[str, Any]]]]:
+    """Run benchmark across multiple dimensions.
+
+    Returns nested dict: ``results[dim][algo][func]``.
+    """
+    if dims is None:
+        dims = [10, 100, 1000]
+
+    all_results: dict[int, dict[str, dict[str, dict[str, Any]]]] = {}
+
+    for dim in dims:
+        if debug:
+            logger.info("=== Dimension %d ===", dim)
+        all_results[dim] = benchmark(
+            functions=functions,
+            algorithms=algorithms,
+            dim=dim,
+            max_iter=max_iter,
+            seed=seed,
+            lr=lr,
+            sigma=sigma,
+            output_dir=(os.path.join(output_dir, f"dim_{dim}") if output_dir else None),
+            debug=debug,
+            pattern=pattern,
+        )
+
+    return all_results
+
+
+def print_benchmark_multi_summary(
+    results: dict[int, dict[str, dict[str, dict[str, Any]]]],
+) -> None:
+    """Print one summary table per dimension."""
+    for dim in sorted(results.keys()):
+        print(f"\n{'=' * 80}")
+        print(f"  Dimension: {dim}")
+        print(f"{'=' * 80}")
+        print_benchmark_summary(results[dim])
+
+
+# ---------------------------------------------------------------------------
+# Comparison plots (multi-algorithm, multi-dimension)
+# ---------------------------------------------------------------------------
+
+
+def plot_benchmark_comparison(
+    results: dict[int, dict[str, dict[str, dict[str, Any]]]],
+    output_path: str | None = None,
+    show: bool = False,
+    top_n: int = 20,
+) -> None:
+    """Generate multi-panel comparison plots from benchmark results.
+
+    Creates one subplot per dimension.  Each subplot is a grouped bar chart
+    comparing algorithms on each function (best value found, log scale).
+
+    Parameters
+    ----------
+    results : dict
+        Output of :func:`benchmark_multi`:
+        ``results[dim][algo][func]``.
+    output_path : str or None
+        Save figure to this path.
+    show : bool
+        Display interactively.
+    top_n : int
+        Show only the first ``top_n`` functions (sorted alphabetically).
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.error("matplotlib is required for plotting.")
+        return
+
+    dims = sorted(results.keys())
+    n_dims = len(dims)
+
+    # Collect all (algo, func) pairs from the first dimension
+    first_dim = dims[0]
+    algos = sorted(results[first_dim].keys())
+    func_names: set[str] = set()
+    for algo in algos:
+        func_names.update(results[first_dim][algo].keys())
+    func_names_sorted = sorted(func_names)[:top_n]
+
+    n_funcs = len(func_names_sorted)
+    n_algos = len(algos)
+
+    fig, axes = plt.subplots(
+        1,
+        n_dims,
+        figsize=(6 * n_dims, max(6, n_funcs * 0.4)),
+        squeeze=False,
+    )
+
+    x = np.arange(n_funcs)
+    width = 0.8 / n_algos
+    cmap = plt.get_cmap("tab10")
+
+    for col, dim in enumerate(dims):
+        ax = axes[0, col]
+        for i, algo in enumerate(algos):
+            color = cmap(i / max(1, n_algos - 1)) if n_algos > 1 else cmap(0.0)
+            values = []
+            for fn in func_names_sorted:
+                entry = results[dim][algo].get(fn, {})
+                best = entry.get("best", float("nan"))
+                values.append(best if np.isfinite(best) else np.nan)
+            ax.bar(x + i * width, values, width, label=algo, color=color)
+
+        ax.set_yscale("log")
+        ax.set_xticks(x + width * (n_algos - 1) / 2)
+        ax.set_xticklabels(func_names_sorted, rotation=45, ha="right", fontsize=7)
+        ax.set_ylabel("Best f(x)")
+        ax.set_title(f"Dimension = {dim}")
+        ax.grid(axis="y", alpha=0.3)
+        if col == n_dims - 1:
+            ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.01, 1))
+
+    fig.suptitle(
+        "Benchmark: best value per function, algorithm, and dimension",
+        fontsize=14,
+        fontweight="bold",
+    )
+    plt.tight_layout()
+
+    if output_path:
+        fig.savefig(output_path, dpi=300, bbox_inches="tight")
+        logger.info("Comparison plot saved to %s", output_path)
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def plot_convergence_grid(
+    results: dict[int, dict[str, dict[str, dict[str, Any]]]],
+    functions: list[str] | None = None,
+    output_path: str | None = None,
+    show: bool = False,
+) -> None:
+    """Grid of convergence curves: rows = functions, columns = dimensions.
+
+    Each cell shows f(x) vs iterations for all algorithms on that
+    function/dimension combination.
+
+    Parameters
+    ----------
+    results : dict
+        Output of :func:`benchmark_multi`.
+    functions : list of str or None
+        Which functions to plot. If None, first 9 alphabetically.
+    output_path : str or None
+        Save figure to this path.
+    show : bool
+        Display interactively.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.error("matplotlib is required for plotting.")
+        return
+
+    dims = sorted(results.keys())
+    n_dims = len(dims)
+    algos = sorted(results[dims[0]].keys())
+
+    # Pick functions
+    if functions is None:
+        all_funcs: set[str] = set()
+        for algo in algos:
+            all_funcs.update(results[dims[0]][algo].keys())
+        functions = sorted(all_funcs)[:9]
+
+    n_funcs = len(functions)
+    n_algos = len(algos)
+    cmap = plt.get_cmap("tab10")
+
+    fig, axes = plt.subplots(
+        n_funcs,
+        n_dims,
+        figsize=(5 * n_dims, 3 * n_funcs),
+        squeeze=False,
+    )
+
+    for row, fn in enumerate(functions):
+        for col, dim in enumerate(dims):
+            ax = axes[row, col]
+            for i, algo in enumerate(algos):
+                color = cmap(i / max(1, n_algos - 1)) if n_algos > 1 else cmap(0.0)
+                entry = results[dim][algo].get(fn, {})
+                vals = entry.get("values", [])
+                if vals:
+                    ax.plot(vals, label=algo, color=color, linewidth=0.8)
+            ax.set_yscale("log")
+            ax.set_xlabel("Iteration")
+            if col == 0:
+                ax.set_ylabel(fn[:30])
+            if row == 0:
+                ax.set_title(f"dim={dim}")
+            ax.grid(True, alpha=0.2)
+
+    # Single legend at the bottom
+    from matplotlib.lines import Line2D
+    handles = [
+        Line2D([0], [0], color=cmap(i / max(1, n_algos - 1)), label=algo)
+        for i, algo in enumerate(algos)
+    ]
+    fig.legend(handles, algos, loc="lower center", ncol=n_algos, fontsize=8)
+    fig.suptitle("Convergence curves", fontsize=14, fontweight="bold")
+    plt.tight_layout(rect=(0, 0.04, 1, 0.97))
+
+    if output_path:
+        fig.savefig(output_path, dpi=300, bbox_inches="tight")
+        logger.info("Convergence grid saved to %s", output_path)
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
