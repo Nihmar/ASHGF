@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import os
 import logging
+import os
 import sys
 
 from ashgf import __version__
@@ -325,41 +325,62 @@ def main(argv: list[str] | None = None) -> int:
         output_dir = args.output or "results"
 
         if args.dims is not None:
-            # Multi-dimension benchmark
+            # Multi-dimension benchmark: one dim at a time,
+            # with per-dimension plots produced immediately
             dims = _parse_dims(args.dims)
-            results = benchmark_multi(
-                algorithms=algos,
-                dims=dims,
-                max_iter=args.max_iter,
-                seed=args.seed,
-                lr=args.lr,
-                sigma=args.sigma,
-                output_dir=output_dir,
-                debug=not quiet,
-                pattern=args.pattern,
-                patience=args.patience,
-                ftol=args.ftol,
-            )
-            print_benchmark_multi_summary(results)
+            all_results: dict[int, dict] = {}
 
-            # Auto-save comparison bar chart
+            for dim in dims:
+                dim_dir = os.path.join(output_dir, f"dim_{dim}")
+                csv_dir = os.path.join(dim_dir, "csv")
+                dim_results = benchmark(
+                    algorithms=algos,
+                    dim=dim,
+                    max_iter=args.max_iter,
+                    seed=args.seed,
+                    lr=args.lr,
+                    sigma=args.sigma,
+                    output_dir=csv_dir,
+                    debug=not quiet,
+                    pattern=args.pattern,
+                    patience=args.patience,
+                    ftol=args.ftol,
+                )
+                all_results[dim] = dim_results
+                print_benchmark_summary(dim_results)
+
+                wrapped = {dim: dim_results}
+
+                # Per-dimension per-function plots
+                per_func_dir = os.path.join(dim_dir, "per_function")
+                saved = plot_per_function(wrapped, output_dir=per_func_dir)
+
+                # Per-dimension comparison bars
+                bar_path = os.path.join(dim_dir, "comparison_bars.png")
+                plot_benchmark_comparison(wrapped, output_path=bar_path, show=False)
+
+                # Per-dimension convergence grid
+                grid_path = os.path.join(dim_dir, "convergence_grid.png")
+                plot_convergence_grid(wrapped, output_path=grid_path, show=False)
+
+                print(f"  -> {len(saved)} plots + bars + grid saved in {dim_dir}/\n")
+
+            # Cross-dimension summary
+            print_benchmark_multi_summary(all_results)
+
+            # Cross-dimension plots (only after all dims complete)
             bar_path = os.path.join(output_dir, "comparison_bars.png")
-            plot_benchmark_comparison(results, output_path=bar_path, show=False)
+            plot_benchmark_comparison(all_results, output_path=bar_path, show=False)
 
-            # Auto-save convergence grid (compact overview)
             grid_path = os.path.join(output_dir, "convergence_grid.png")
-            plot_convergence_grid(
-                results, output_path=grid_path, show=False, max_functions=16
-            )
+            plot_convergence_grid(all_results, output_path=grid_path, show=False)
 
-            # Auto-save one PNG per function (detailed)
-            per_func_dir = os.path.join(output_dir, "per_function")
-            plot_per_function(results, output_dir=per_func_dir)
+            print(f"\nCross-dimension plots saved in {output_dir}/")
 
             if args.plot:
-                plot_benchmark_comparison(results, output_path=args.plot, show=False)
+                plot_benchmark_comparison(all_results, output_path=args.plot, show=False)
             if args.plot_conv:
-                plot_convergence_grid(results, output_path=args.plot_conv, show=False)
+                plot_convergence_grid(all_results, output_path=args.plot_conv, show=False)
         else:
             # Single-dimension benchmark
             dim = args.dim if args.dim is not None else 100
@@ -385,9 +406,10 @@ def main(argv: list[str] | None = None) -> int:
             bar_path = os.path.join(output_dir, "comparison_bars.png")
             plot_benchmark_comparison(wrapped, output_path=bar_path, show=False)
 
-            # Auto-save one PNG per function (detailed)
+            # Auto-save one PNG PER FUNCTION (detailed convergence: dims x algos)
             per_func_dir = os.path.join(output_dir, "per_function")
-            plot_per_function(wrapped, output_dir=per_func_dir)
+            saved = plot_per_function(wrapped, output_dir=per_func_dir)
+            print(f"\nGenerated {len(saved)} per-function plots in {per_func_dir}/")
 
             if args.plot:
                 plot_benchmark_comparison(wrapped, output_path=args.plot, show=False)
