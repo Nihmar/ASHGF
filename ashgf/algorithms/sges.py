@@ -22,6 +22,22 @@ class SGES(BaseOptimizer):
     Extends Gaussian smoothing by adaptively mixing random directions
     with directions sampled from the gradient-history subspace.
 
+    .. note::
+
+       **Semantica di ``alpha``.**  In questa implementazione ``alpha``
+       rappresenta la probabilità di campionare una direzione **casuale**
+       (isotropica).  Il valore ``1 - alpha`` è quindi la probabilità di
+       campionare dal sottospazio dei gradienti storici.  Questa scelta è
+       coerente con ``compute_directions_sges``, dove
+       ``choices = binomial(dim, 1 - alpha)``.
+
+       Nella tesi, il parametro :math:`\\alpha` ha il significato opposto
+       (probabilità di campionare dal sottospazio gradiente).  Di
+       conseguenza, la regola di aggiornamento è **invertita** rispetto
+       alla formulazione della tesi: quando il sottospazio gradiente è
+       migliore (:math:`r < \\hat{r}`), ``alpha`` viene **diminuita** per
+       favorire lo sfruttamento.
+
     Parameters
     ----------
     lr : float
@@ -35,7 +51,9 @@ class SGES(BaseOptimizer):
     k2 : float
         Lower bound for alpha.
     alpha : float
-        Initial probability of sampling from gradient subspace.
+        Initial probability of sampling a **random** (isotropic) direction.
+        ``1 - alpha`` is the probability of sampling from the gradient
+        subspace.
     delta : float
         Multiplicative factor for alpha update.
     t : int
@@ -94,7 +112,18 @@ class SGES(BaseOptimizer):
     def _post_iteration(
         self, iteration: int, x: np.ndarray, grad: np.ndarray, f_val: float
     ) -> None:
-        """Update alpha based on relative performance of gradient vs random directions."""
+        """Update alpha based on relative performance of gradient vs random directions.
+
+        .. note::
+
+           **Corretto (bug #1).**  Nella tesi, quando
+           :math:`\\hat{r}_{\\mathbf{G}} < \\hat{r}_{\\mathbf{G}}^{\\perp}`
+           (il sottospazio gradiente produce minimi migliori), :math:`\\alpha`
+           viene **aumentato** per favorire lo sfruttamento.  In questo codice
+           ``alpha`` è la probabilità di direzioni **casuali**, quindi quando
+           ``r < r_hat`` ``alpha`` viene **diminuita** (effetto equivalente:
+           più direzioni dal gradiente).
+        """
         if iteration < self.t:
             return
 
@@ -118,10 +147,15 @@ class SGES(BaseOptimizer):
         # r_hat = mean of minima over random directions (M:dim)
         r_hat = float(np.mean(min_per_dir[M:]))
 
+        # FIXED (bug #1): alpha is probability of RANDOM directions,
+        # so when gradient subspace is better (r < r_hat) we DECREASE alpha
+        # (favour gradient subspace).  When random is better, INCREASE alpha.
         if r < r_hat:
-            self._current_alpha = min(self.delta * self._current_alpha, self.k1)
+            # Gradient subspace is more promising → decrease alpha (less random)
+            self._current_alpha = max(self._current_alpha / self.delta, self.k2)
         else:
-            self._current_alpha = max((1.0 / self.delta) * self._current_alpha, self.k2)
+            # Random subspace is more promising (or tie) → increase alpha (more exploration)
+            self._current_alpha = min(self.delta * self._current_alpha, self.k1)
 
     def grad_estimator(
         self, x: np.ndarray, f: Callable[[np.ndarray], float]

@@ -232,8 +232,8 @@ class ASEBO(BaseOptimizer):
 
             # Number of Monte Carlo directions M
             if self._G_count == self.k:
-                # First PCA iteration – use more samples for stability
-                M = 100
+                # First PCA iteration – use dim directions for stability
+                M = dim
             else:
                 M = n_components
         else:
@@ -241,7 +241,7 @@ class ASEBO(BaseOptimizer):
             U_active = np.empty((0, dim))  # empty, for alpha update
             P_active = np.zeros((dim, dim))
             n_components = dim  # placeholder (not used in covariance)
-            M = 100
+            M = dim
 
         # ==============================================================
         # 2. Build blended covariance

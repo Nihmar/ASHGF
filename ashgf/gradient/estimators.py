@@ -261,13 +261,20 @@ def estimate_lipschitz_constants(
     """
     Estimate directional Lipschitz constants from quadrature data.
 
-    For each direction i, compute
-        L_i = max_k |f(x+σ·p_{k+1}·b_i) - f(x+σ·p_k·b_i)| / (σ·|p_{k+1} - p_k|)
+    Implements the thesis formula (Eq. ``Lipschitz constants``)::
+
+        L_j = max_{{i,k} in I} |F(x+σ·p_i·ξ_j) - F(x+σ·p_k·ξ_j)| / (σ·|p_i - p_k|)
+
+    where the index set ``I`` excludes pairs that are symmetric about
+    the central quadrature node::
+
+        I = {{ {i,k} | |i - floor(m/2)| != |k - floor(m/2)| }}
 
     Parameters
     ----------
     evaluations : np.ndarray, shape (d, m)
-        Matrix of function evaluations along each direction.
+        Matrix of function evaluations along each direction (row = direction,
+        column = quadrature node).
     points : np.ndarray, shape (m,)
         Quadrature nodes (shared across all directions).
     sigma : float
@@ -278,16 +285,35 @@ def estimate_lipschitz_constants(
     lipschitz : np.ndarray, shape (d,)
         Estimated Lipschitz constants per direction.
     """
-    # |f(x+σ·p_{k+1}·b_i) - f(x+σ·p_k·b_i)|  → shape (d, m-1)
-    diff_evals = np.abs(np.diff(evaluations, axis=1))  # (d, m-1)
+    d, m = evaluations.shape
+    mid = m // 2
 
-    # σ·|p_{k+1} - p_k|  → shape (m-1,)
-    diff_pts = sigma * np.abs(np.diff(points))  # (m-1,)
+    # ---- Build all unordered pairs (i, k) with i < k ----
+    i_idx, k_idx = np.triu_indices(m, k=1)  # each shape (P,)
 
-    # Ratios: (d, m-1) / (m-1,) → (d, m-1)
+    # ---- Exclude symmetric pairs around the centre ----
+    dist_i = np.abs(i_idx - mid)
+    dist_k = np.abs(k_idx - mid)
+    keep = dist_i != dist_k
+
+    i_idx = i_idx[keep]
+    k_idx = k_idx[keep]
+    # P ~ m*(m-1)/2 - floor((m-1)/2)  valid pairs
+
+    if len(i_idx) == 0:
+        return np.zeros(d)
+
+    # ---- Vectorised ratios across all directions and all valid pairs ----
+    # diff_evals: shape (d, P)
+    diff_evals = np.abs(evaluations[:, i_idx] - evaluations[:, k_idx])
+
+    # diff_pts: shape (P,)
+    diff_pts = sigma * np.abs(points[i_idx] - points[k_idx])
+
+    # ratios: (d, P) / (P,) -> (d, P)
     ratios = diff_evals / diff_pts[None, :]
 
-    # Max per direction → (d,)
+    # Max over valid pairs per direction -> (d,)
     lipschitz = np.max(ratios, axis=1)
 
     return lipschitz
