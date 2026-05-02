@@ -47,15 +47,13 @@ import logging
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
-from scipy.linalg import orth  # pylint: disable=import-error
-from scipy.stats import special_ortho_group  # pylint: disable=import-error
 
 from ashgf.algorithms.base import BaseOptimizer
 from ashgf.gradient.estimators import (
     estimate_lipschitz_constants,
     gauss_hermite_derivative,
 )
-from ashgf.gradient.sampling import compute_directions_ashgf
+from ashgf.gradient.sampling import _random_orthogonal, compute_directions_ashgf
 
 if TYPE_CHECKING:
     from numpy import typing as npt
@@ -292,7 +290,7 @@ class ASHGF(BaseOptimizer):
         self._r = self.r_init
         self._L_nabla = 0.0
         self._lipschitz = np.ones(dim)
-        self._basis = special_ortho_group.rvs(dim)
+        self._basis = _random_orthogonal(dim)
         self._M = dim  # initially attribute all directions to "gradient subspace"
         self._G_buffer = np.zeros((self.t, dim))
         self._G_count = 0
@@ -341,7 +339,9 @@ class ASHGF(BaseOptimizer):
                 dim, G_slice, self._current_alpha, self._M
             )
             self._M = M
-            basis: np.ndarray = orth(directions)
+            # QR is 2-3x faster than SVD-based scipy.linalg.orth
+            Q, _ = np.linalg.qr(directions.T)
+            basis: np.ndarray = Q.T
         else:
             # Warm-up: pure random orthogonal basis
             assert self._basis is not None, "_basis must be initialised in _setup"
@@ -421,7 +421,7 @@ class ASHGF(BaseOptimizer):
                 iteration,
                 self._sigma,
             )
-            self._basis = special_ortho_group.rvs(dim)
+            self._basis = _random_orthogonal(dim)
             self._sigma = self.sigma_zero_ref
             self._A = self.A_init
             self._B = self.B_init
@@ -436,7 +436,7 @@ class ASHGF(BaseOptimizer):
         # --------------------------------------------------------------
         if not has_history:
             self._M = dim // 2
-            self._basis = special_ortho_group.rvs(dim)
+            self._basis = _random_orthogonal(dim)
 
         # --------------------------------------------------------------
         # 4. Sigma and threshold adaptation

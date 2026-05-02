@@ -10,6 +10,19 @@ from __future__ import annotations
 
 import numpy as np
 
+# ---------------------------------------------------------------------------
+# Cache for commonly reused index arrays
+# ---------------------------------------------------------------------------
+_ARR_CACHE: dict[int, np.ndarray] = {}
+
+
+def _cached_arange(n: int) -> np.ndarray:
+    """Return _cached_arange(n), cached per n."""
+    if n not in _ARR_CACHE:
+        _ARR_CACHE[n] = np.arange(1, n + 1, dtype=np.float64)
+    return _ARR_CACHE[n]
+
+
 __all__ = [
     "extended_baele",
     "extended_bd1",
@@ -83,7 +96,7 @@ def extended_trigonometric(x: np.ndarray) -> float:
     cos_x = np.cos(x)
 
     term_1 = n - np.sum(cos_x)  # scalar
-    term_2 = np.arange(1, n + 1) * (1.0 - cos_x)  # array
+    term_2 = _cached_arange(n) * (1.0 - cos_x)  # array
     term_3 = np.sin(x)  # array
 
     return float(np.sum((term_1 + term_2 + term_3) ** 2))

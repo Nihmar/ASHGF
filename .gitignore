@@ -211,3 +211,8 @@ __marimo__/
 /results
 comparison_bars.png
 convergence_grid.png
+
+
+# Added by cargo
+
+/target

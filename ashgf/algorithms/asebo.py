@@ -82,15 +82,17 @@ from ashgf.gradient.estimators import _parallel_eval
 # ---------------------------------------------------------------------------
 try:
     from sklearn.decomposition import PCA as _PCA
+    from sklearn.decomposition import IncrementalPCA as _IncrementalPCA
 
     _HAS_SKLEARN = True
 except ImportError:  # pragma: no cover
     _HAS_SKLEARN = False
     _PCA = None  # type: ignore[assignment]
+    _IncrementalPCA = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
-    # Re-import so the type-checker treats _PCA as the real class.
     from sklearn.decomposition import PCA as _PCA  # noqa: F811
+    from sklearn.decomposition import IncrementalPCA as _IncrementalPCA  # noqa: F811
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +180,11 @@ class ASEBO(BaseOptimizer):
         self._G_idx: int = 0  # next write position
         self._G_count: int = 0  # number of entries stored (≤ buffer_size)
         self._alpha: float = 1.0  # current blending parameter
+        # Incremental PCA state (fitted lazily in grad_estimator)
+        self._ipca: _IncrementalPCA | None = None
+        self._ipca_components: np.ndarray | None = None  # cached (r, d)
+        self._ipca_n_components: int = 0
+        self._pca_refit_counter: int = 0
 
     # ------------------------------------------------------------------
     # Template-method hooks
@@ -192,6 +199,11 @@ class ASEBO(BaseOptimizer):
         self._G_idx = 0
         self._G_count = 0
         self._alpha = 1.0
+        # Initialise IncrementalPCA with a sensible n_components cap
+        self._ipca = _IncrementalPCA(n_components=min(50, dim)) if _HAS_SKLEARN else None
+        self._ipca_components = None
+        self._ipca_n_components = 0
+        self._pca_refit_counter = 0
 
     # ------------------------------------------------------------------
     # Gradient estimator
@@ -216,26 +228,43 @@ class ASEBO(BaseOptimizer):
         # 1. Determine active-subspace dimension and projectors
         # ==============================================================
         if self._G is not None and self._G_count >= self.k:
-            # --- PCA on the *valid* portion of the gradient-history buffer ---
-            G_valid = self._G[: self._G_count]  # (count, d)
-            pca = _PCA()  # type: ignore[misc]  # validated in __init__
-            pca.fit(G_valid)
+            # --- PCA on gradient-history buffer (incremental + periodic refit) ---
+            # Re-fit from scratch every 20 iterations to respect exponential decay;
+            # between refits, update incrementally via partial_fit.
+            self._pca_refit_counter += 1
+            REFIT_INTERVAL = 20
 
-            var_cumsum = np.cumsum(pca.explained_variance_ratio_)
-            n_components = int(np.argmax(var_cumsum >= self.thresh) + 1)
-            n_components = max(n_components, 10)
-            n_components = min(n_components, dim)
+            if self._pca_refit_counter % REFIT_INTERVAL == 1 or self._ipca_components is None:
+                # Full refit on the valid portion of the buffer
+                G_valid = self._G[: self._G_count]
+                if self._ipca is not None:
+                    self._ipca.fit(G_valid)
+                    var_cumsum = np.cumsum(self._ipca.explained_variance_ratio_)
+                    n_components = int(np.argmax(var_cumsum >= self.thresh) + 1)
+                    n_components = max(n_components, 10)
+                    n_components = min(n_components, dim)
+                    self._ipca_components = self._ipca.components_[:n_components].copy()
+                    self._ipca_n_components = n_components
+            elif self._ipca is not None:
+                # Incremental update with the latest gradient only
+                latest_grad = self._G[(self._G_idx - 1) % self.buffer_size]
+                self._ipca.partial_fit(latest_grad.reshape(1, -1))
+                var_cumsum = np.cumsum(self._ipca.explained_variance_ratio_)
+                n_components = int(np.argmax(var_cumsum >= self.thresh) + 1)
+                n_components = max(n_components, 10)
+                n_components = min(n_components, dim)
+                self._ipca_components = self._ipca.components_[:n_components].copy()
+                self._ipca_n_components = n_components
 
-            # Active-subspace projector  P_active = U_active^T @ U_active
-            U_active = pca.components_[:n_components]  # (r, d)
-            P_active = np.dot(U_active.T, U_active)  # (d, d)
+            U_active = self._ipca_components if self._ipca_components is not None else np.empty((0, dim))
+            n_components = self._ipca_n_components
+            P_active = np.dot(U_active.T, U_active) if U_active.shape[0] > 0 else np.zeros((dim, dim))
 
             # Number of Monte Carlo directions M
             if self._G_count == self.k:
-                # First PCA iteration – use dim directions for stability
                 M = dim
             else:
-                M = n_components
+                M = max(n_components, 10)
         else:
             # --- Warm-up phase: isotropic sampling ---
             U_active = np.empty((0, dim))  # empty, for alpha update

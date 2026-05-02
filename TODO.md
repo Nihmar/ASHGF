@@ -1,82 +1,93 @@
-# TODO — Verifica e correzione bug Tesi ↔ Codice
+# TODO — Ottimizzazioni per velocizzare i benchmark
 
-Bug trovati durante la verifica incrociata tra la tesi (`thesis/chapters/`) e
-le implementazioni in `ashgf/algorithms/`.
-
----
-
-## 🔴 Critici
-
-### [x] #1 SGES — Alpha update invertito ✅ RISOLTO
-- **File**: `ashgf/algorithms/sges.py`
-- **Descrizione**: Quando lo spazio gradiente produce valori funzione migliori
-  ($r < \hat{r}$), il codice **aumentava** `alpha` (probabilità di direzioni
-  casuali), mentre la tesi prescrive di **diminuire** $\alpha$ per favorire lo
-  sfruttamento. La stessa correzione già applicata in ASHGF è stata portata in
-  SGES.
-- **Fix**: Invertiti i rami dell'`if r < r_hat`: ora se il gradiente è migliore
-  `alpha /= delta` (diminuisce), altrimenti `alpha *= delta` (aumenta).
-- **Riferimento tesi**: Eq. `adapt alpha`, Sezione SGES (Cap. 2, Sez. 4)
+Ordinate per rapporto impatto/sforzo.
 
 ---
 
-## 🟡 Moderati
+## 🔴 Priorità 1 — Cambio minimo, impatto massimo
 
-### [x] #2 — Stima costanti di Lipschitz: solo nodi consecutivi ✅ RISOLTO
-- **File**: `ashgf/gradient/estimators.py` → `estimate_lipschitz_constants()`
-- **Descrizione**: La tesi (Eq. `Lipschitz constants`) definisce l'insieme $I$
-  che include **tutte** le coppie $\{i,k\}$ tranne quelle simmetriche rispetto
-  al centro. Il codice usava `np.diff` che calcolava solo differenze tra nodi
-  **consecutivi** $(p_k, p_{k+1})$, sottostimando la costante di Lipschitz in
-  presenza di variazioni brusche tra nodi non adiacenti.
-- **Fix**: Riscritta la funzione per generare tutte le coppie valide via
-  `np.triu_indices`, filtrare quelle simmetriche, e calcolare il max su tutte
-  le coppie rimanenti (vectorizzato).
+### [x] #1 Sostituire `special_ortho_group.rvs` con `qr(randn)` in ASGF e ASHGF ✅
+- **File**: `ashgf/algorithms/asgf.py`, `ashgf/algorithms/ashgf.py`, `ashgf/gradient/sampling.py`
+- **Impatto**: 3-10x su ASGF/ASHGF (evita O(d³) SVD ogni iterazione)
+- **Fix**: Creato helper `_random_orthogonal(dim, rng)` in `sampling.py` che usa
+  `np.linalg.qr(rng.standard_normal((dim, dim)))`. Sostituite tutte le occorrenze
+  di `special_ortho_group.rvs` in ASGF e ASHGF. In ASGF, la rotazione della base
+  ora usa direttamente QR invece di `special_ortho_group + orth`.
 
-### ~ #3 ASEBO — Campionamento blended covariance vs probabilistic mixture ⚠️ DOCUMENTATO
-- **File**: `ashgf/algorithms/asebo.py`
-- **Descrizione**: La tesi descrive un campionamento **probabilistico**: ogni
-  direzione viene campionata o dallo spazio attivo o da quello ortogonale. Il
-  codice usa una matrice di covarianza "blended" che fonde i due contributi.
-  La scelta è già documentata nel docstring come "design choice" e non impatta
-  la correttezza matematica (entrambi i metodi sono validi).
-- **Stato**: Scelta progettuale consapevole. Non modificata.
+### [x] #2 Sostituire `orth()` (SVD) con `qr()` in ASHGF ✅
+- **File**: `ashgf/algorithms/ashgf.py` → `grad_estimator`
+- **Impatto**: 2-3x sul `grad_estimator` di ASHGF
+- **Fix**: `Q, _ = np.linalg.qr(directions.T); basis = Q.T`
 
-### ~ #4 ASEBO — Aggiornamento $p^t$/$\alpha$ con formula chiusa ⚠️ DOCUMENTATO
-- **File**: `ashgf/algorithms/asebo.py`
-- **Descrizione**: La tesi descrive un Algoritmo 2 interno di ottimizzazione su
-  orizzonte $C$ per determinare $p^t$. Il codice usa una semplice formula chiusa
-  basata sul rapporto delle norme proiettate:
-  `alpha = norm_ort / norm_active`. È una semplificazione drastica.
-- **Stato**: Differenza sostanziale. Richiederebbe una riscrittura significativa
-  per implementare l'Algoritmo 2. Rimandato.
-
-### ~ #5 ASEBO — Aggiornamento covarianza via PCA su buffer ⚠️ DOCUMENTATO
-- **File**: `ashgf/algorithms/asebo.py`
-- **Descrizione**: La tesi usa media mobile esponenziale su matrice di
-  covarianza: $\text{Cov}_{t+1} = \lambda \text{Cov}_t + (1-\lambda)\Gamma$.
-  Il codice mantiene un buffer di gradienti con decadimento 0.99 e applica PCA.
-  Non sono equivalenti in generale.
-- **Stato**: Approssimazione ragionevole. Modifica rinviata.
+### [x] #3 Cache degli array di indici nelle funzioni benchmark ✅
+- **File**: `ashgf/functions/benchmark.py`, `ashgf/functions/classic.py`,
+  `ashgf/functions/extended.py`
+- **Impatto**: 20-30% sul tempo di valutazione delle funzioni
+- **Fix**: Aggiunto `_ARR_CACHE` e helper `_cached_arange(n)` in ciascun modulo.
+  Sostituite tutte le occorrenze di `np.arange(1, n+1)` e varianti.
 
 ---
 
-## 🟢 Minori
+## 🟡 Priorità 2 — Impatto alto, sforzo medio
 
-### [x] #6 ASEBO — Warm-up: $n_t=100$ fisso invece di $n_t=d$ ✅ RISOLTO
+### [x] #4 Parallelizzare `benchmark()` e `statistics()` con `ProcessPoolExecutor` ✅
+- **File**: `ashgf/benchmark.py`, `ashgf/cli/run.py`
+- **Impatto**: Fino a Nx con N core (le run sono indipendenti)
+- **Fix**: Aggiunte `_run_benchmark_task` e `_run_stats_task` picklabili.
+  `benchmark()` e `statistics()` ora accettano `n_jobs` (default=1 sequenziale).
+  CLI espone `--jobs N`. `benchmark_multi` propaga `n_jobs`.
+
+### [x] #5 Vectorizzare la generazione dei punti nei gradient estimator ✅
+- **File**: `ashgf/gradient/estimators.py`
+- **Impatto**: 2-5x sulla costruzione dei punti in `gaussian_smoothing` e
+  `gauss_hermite_derivative`
+- **Descrizione**: I punti perturbati sono generati con loop Python annidati.
+  Si può usare broadcasting NumPy: `x[None,:] + sigma_dirs` per generare
+  tutte le perturbazioni in una sola operazione.
+- **Fix**: Riscrivere `gaussian_smoothing` e `gauss_hermite_derivative` per
+  costruire i punti via broadcasting. Adattare `_parallel_eval` per accettare
+  array 2D.
+
+### [x] #6 Pre-allocare array nel loop base invece del dict `steps` ✅
+- **File**: `ashgf/algorithms/base.py`
+- **Impatto**: 20-40% sull'overhead del loop principale
+- **Descrizione**: `steps: dict[int, tuple[ndarray, float]]` crea overhead
+  di hashing e allocazione. Pre-allocare `np.empty((max_iter+1,))` per i valori.
+- **Fix**: Sostituire `steps` dict con array pre-allocati.
+
+### [x] #7 PCA incrementale per ASEBO ✅
 - **File**: `ashgf/algorithms/asebo.py`
-- **Descrizione**: La tesi prescrive $n_t = d$ direzioni durante il warm-up,
-  il codice usava `M = 100` fisso. Ora usa `M = dim`.
-- **Fix**: Sostituito `M = 100` con `M = dim` nel ramo warm-up e nel primo
-  passo PCA.
+- **Impatto**: 2-5x su ASEBO
+- **Descrizione**: ASEBO chiama `PCA().fit()` sull'intero buffer storico ogni
+  iterazione. Usare `IncrementalPCA.partial_fit()` per aggiornare solo con
+  l'ultimo gradiente.
+- **Fix**: Sostituire `PCA` con `IncrementalPCA`, chiamare `partial_fit`
+  incrementalmente.
 
 ---
 
-## ✅ Già risolti (verificati)
+## 🟢 Priorità 3 — Miglioramenti minori
 
-- **BUG 1.5.1** — SGES `grad_estimator()` sovrascriveva le direzioni → ✅
-- **BUG 1.5.2** — ASHGF usava `f(x_{i-1})` invece di `f(x_i)` → ✅
-- **BUG 1.5.3** — SGES chiamava `np.random.seed()` dentro `grad_estimator()` → ✅
-- **Dati globali** — `ASHGF.data` / `ASGF.data` spostati ad attributi di istanza → ✅
-- **Formula gradiente ASEBO** — divisione per `n_samples` aggiunta → ✅
-- **Normalizzazione ASEBO** — normalizzazione a norma 1 rimossa (preserva $\chi(d)$) → ✅
+### [x] #8 Evitare `np.exp(x)` ripetuti in `diagonal_5` e simili ✅
+- **File**: `ashgf/functions/benchmark.py`
+- **Impatto**: 5-10% su funzioni specifiche
+- **Descrizione**: `diagonal_5` chiama `np.exp(x) + np.exp(-x)` (due exp).
+  Calcolare `e_x = np.exp(x)` e usare `e_x + 1/e_x`.
+
+### [x] #9 Ridurre la frequenza del check di convergenza ✅
+- **File**: `ashgf/algorithms/base.py`
+- **Impatto**: 5% sull'overhead del loop
+- **Descrizione**: `la.norm(x - x_prev)` è O(d). Controllare solo ogni
+  k iterazioni o usare `np.max(np.abs(x - x_prev))` (norma infinito).
+
+### [ ] #10 Covarianza incrementale in `compute_directions_sges`
+- **File**: `ashgf/gradient/sampling.py`
+- **Impatto**: 1.5-2x su SGES/ASHGF
+- **Descrizione**: `np.cov(G_arr.T)` ricalcola tutto da zero. Mantenere
+  stima running con aggiornamento di Welford.
+
+### [ ] #11 CSV writing asincrono in `benchmark()`
+- **File**: `ashgf/benchmark.py`
+- **Impatto**: Basso (evita I/O bloccante)
+- **Descrizione**: Accumulare i dati in memoria e scrivere alla fine in bulk
+  o in un thread separato.

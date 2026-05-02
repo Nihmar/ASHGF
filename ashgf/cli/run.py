@@ -204,6 +204,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tolerance on f(x) change for stagnation",
     )
     bench_parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Number of parallel workers (default: 1, sequential)",
+    )
+    bench_parser.add_argument(
         "--quiet", action="store_true", help="Suppress per-run output"
     )
 
@@ -255,6 +261,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--plot",
         default=None,
         help="If set, save convergence plot to this file path",
+    )
+    stats_parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Number of parallel workers (default: 1, sequential)",
     )
     stats_parser.add_argument(
         "--quiet", action="store_true", help="Suppress per-run output"
@@ -357,6 +369,7 @@ def main(argv: list[str] | None = None) -> int:
                     pattern=args.pattern,
                     patience=args.patience,
                     ftol=args.ftol,
+                    n_jobs=args.jobs,
                 )
                 all_results[dim] = dim_results
                 print_benchmark_summary(dim_results)
@@ -429,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
                 pattern=args.pattern,
                 patience=args.patience,
                 ftol=args.ftol,
+                n_jobs=args.jobs,
             )
             print_benchmark_summary(results)
 
@@ -476,6 +490,7 @@ def main(argv: list[str] | None = None) -> int:
             debug=not quiet,
             patience=args.patience,
             ftol=args.ftol,
+            n_jobs=args.jobs,
         )
         print_statistics_summary(st, args.function)
 

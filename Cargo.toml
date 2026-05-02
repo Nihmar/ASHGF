@@ -1,0 +1,66 @@
+[package]
+name = "ashgf"
+version = "0.2.0"
+edition = "2021"
+description = "Adaptive Stochastic Historical Gradient-Free Optimization"
+license = "MIT"
+readme = "README.md"
+authors = ["ASHGF Contributors"]
+keywords = ["optimization", "derivative-free", "gaussian-smoothing", "evolution-strategies"]
+categories = ["science", "mathematics", "algorithms"]
+
+[features]
+default = ["pca"]
+pca = ["dep:smartcore"]
+rl = []
+
+[dependencies]
+# ---- Core numerical ----
+ndarray = { version = "0.16", features = ["approx"] }
+ndarray-linalg = { version = "0.17", features = ["openblas"] }
+ndarray-stats = "0.6"
+num-traits = "0.2"
+
+# ---- Random ----
+rand = "0.8"
+rand_distr = "0.4"
+
+# ---- Gauss-Hermite quadrature ----
+gauss-quad = "0.1"
+
+# ---- PCA (optional, for ASEBO) ----
+smartcore = { version = "0.3", optional = true }
+
+# ---- Parallelism ----
+rayon = "1.10"
+
+# ---- CLI ----
+clap = { version = "4.5", features = ["derive"] }
+
+# ---- Logging ----
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# ---- Serialization ----
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ---- CSV output ----
+csv = "1.3"
+
+# ---- Error handling ----
+thiserror = "2"
+anyhow = "1"
+
+# ---- Static initialization ----
+once_cell = "1.20"
+
+[dev-dependencies]
+approx = "0.5"
+rstest = "0.21"
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
+
+[[bin]]
+name = "ashgf"
+path = "src/main.rs"

@@ -17,6 +17,19 @@ import math
 import numpy as np
 
 # ---------------------------------------------------------------------------
+# Cache for commonly reused index arrays (avoids re-allocation on every call)
+# ---------------------------------------------------------------------------
+_ARR_CACHE: dict[int, np.ndarray] = {}
+
+
+def _cached_arange(n: int) -> np.ndarray:
+    """Return np.arange(1, n + 1), cached per n."""
+    if n not in _ARR_CACHE:
+        _ARR_CACHE[n] = np.arange(1, n + 1, dtype=np.float64)
+    return _ARR_CACHE[n]
+
+
+# ---------------------------------------------------------------------------
 # Benchmark functions
 # ---------------------------------------------------------------------------
 
@@ -40,7 +53,7 @@ def perturbed_quadratic(x: np.ndarray) -> float:
         Function value.
     """
     n = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     term_1 = float(np.sum(i * x**2))
     term_2 = (1.0 / 100.0) * float(np.sum(x)) ** 2
     return float(term_1 + term_2)
@@ -65,7 +78,7 @@ def raydan_1(x: np.ndarray) -> float:
         Function value.
     """
     n = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     return float((1.0 / 10.0) * np.sum(i * (np.exp(x) - x)))
 
 
@@ -107,7 +120,7 @@ def diagonal_1(x: np.ndarray) -> float:
         Function value.
     """
     n = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     return float(np.sum(np.exp(x) - i * x))
 
 
@@ -129,7 +142,7 @@ def diagonal_2(x: np.ndarray) -> float:
         Function value.
     """
     n = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     return float(np.sum(np.exp(x) - x / i))
 
 
@@ -151,7 +164,7 @@ def diagonal_3(x: np.ndarray) -> float:
         Function value.
     """
     n = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     return float(np.sum(np.exp(x) - i * np.sin(x)))
 
 
@@ -173,7 +186,7 @@ def hager(x: np.ndarray) -> float:
         Function value.
     """
     n = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     return float(np.sum(np.exp(x) - np.sqrt(i) * x))
 
 
@@ -247,7 +260,8 @@ def diagonal_5(x: np.ndarray) -> float:
     float
         Function value.
     """
-    return float(np.sum(np.log(np.exp(x) + np.exp(-x))))
+    e_x = np.exp(x)
+    return float(np.sum(np.log(e_x + 1.0 / e_x)))
 
 
 def diagonal_7(x: np.ndarray) -> float:
@@ -311,7 +325,7 @@ def diagonal_9(x: np.ndarray) -> float:
         Function value.
     """
     n = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     term_1 = float(np.sum(np.exp(x) - i * x))
     term_2 = 10000.0 * float(x[-1] ** 2)
     return float(term_1 + term_2)
@@ -440,7 +454,7 @@ def tridia(x: np.ndarray) -> float:
     delta = 1.0
 
     term_1 = gamma * (delta * x[0] - 1.0) ** 2
-    term_2 = np.sum(np.arange(2, n + 1) * (alfa * x[1:] - beta * x[:-1]) ** 2)
+    term_2 = np.sum(_cached_arange(n)[1:] * (alfa * x[1:] - beta * x[:-1]) ** 2)
     return float(term_1 + term_2)
 
 
@@ -616,7 +630,7 @@ def almost_perturbed_quadratic(x: np.ndarray) -> float:
         Function value.
     """
     n = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     term_1 = float(np.sum(i * x**2))
     term_2 = (1.0 / 100.0) * (x[0] + x[-1]) ** 2
     return float(term_1 + term_2)
@@ -668,7 +682,7 @@ def power(x: np.ndarray) -> float:
         Function value.
     """
     n = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     return float(np.sum(i * x**2))
 
 
@@ -897,7 +911,7 @@ def vardim(x: np.ndarray) -> float:
     """
     n = len(x)
     term_1 = float(np.sum((x - 1.0) ** 2))
-    weighted_sum = float(np.sum(np.arange(1, n + 1) * x))
+    weighted_sum = float(np.sum(_cached_arange(n) * x))
     offset = float(n * (n + 1) / 2.0)
     term_2 = (weighted_sum - offset) ** 2
     term_3 = term_2**2
@@ -1132,7 +1146,7 @@ def quadratic_qf1(x: np.ndarray) -> float:
         Function value.
     """
     n = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     term_1 = 0.5 * float(np.sum(i * x**2))
     term_2 = float(x[-1])
     return float(term_1 + term_2)
@@ -1204,7 +1218,7 @@ def quadratic_qf2(x: np.ndarray) -> float:
         Function value.
     """
     n = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     term_1 = 0.5 * float(np.sum(i * (x**2 - 1.0) ** 2))
     term_2 = float(x[-1])
     return float(term_1 + term_2)
@@ -1230,5 +1244,5 @@ def perturbed_quadratic_diagonal(x: np.ndarray) -> float:
     """
     n = len(x)
     term_1 = float(np.sum(x)) ** 2
-    term_2 = float(np.sum((np.arange(1, n + 1) / 100.0) * x**2))
+    term_2 = float(np.sum((_cached_arange(n) / 100.0) * x**2))
     return float(term_1 + term_2)

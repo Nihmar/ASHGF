@@ -6,14 +6,13 @@ import logging
 from typing import Callable
 
 import numpy as np
-from scipy.linalg import orth
-from scipy.stats import special_ortho_group
 
 from ashgf.algorithms.base import BaseOptimizer
 from ashgf.gradient.estimators import (
     estimate_lipschitz_constants,
     gauss_hermite_derivative,
 )
+from ashgf.gradient.sampling import _random_orthogonal
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +169,7 @@ class ASGF(BaseOptimizer):
         self._r = self.r_init
         self._L_nabla = 0.0
         self._lipschitz = np.ones(dim)
-        self._basis = special_ortho_group.rvs(dim, random_state=self._rng)
+        self._basis = _random_orthogonal(dim, self._rng)
 
         logger.debug(
             "ASGF setup: sigma=%.6e sigma_zero=%.6e dim=%d",
@@ -246,7 +245,7 @@ class ASGF(BaseOptimizer):
                 self.ro * self._sigma_zero,
                 self._r,
             )
-            self._basis = special_ortho_group.rvs(dim, random_state=self._rng)
+            self._basis = _random_orthogonal(dim, self._rng)
             self._sigma = self._sigma_zero
             self._A = self.A_init
             self._B = self.B_init
@@ -255,17 +254,16 @@ class ASGF(BaseOptimizer):
 
         # -- Basis rotation ----------------------------------------------
         # The first basis vector is aligned with the current gradient;
-        # the remaining directions are orthonormalised.
-        # NOTE: special_ortho_group.rvs always returns a (dim, dim)
-        # full-rank matrix, and scipy.linalg.orth preserves the rank of
-        # a full-rank input, so no rank-deficiency retry loop is needed.
+        # the remaining directions are orthonormalised via QR (faster
+        # than the previous SVD-based scipy.linalg.orth).
         grad_norm = float(np.linalg.norm(grad))
         if grad_norm > 1e-12:
-            new_basis = special_ortho_group.rvs(dim, random_state=self._rng)
-            new_basis[0] = grad / grad_norm
-            self._basis = orth(new_basis)
+            M = self._rng.standard_normal((dim, dim))
+            M[0] = grad / grad_norm
+            Q, _ = np.linalg.qr(M.T)
+            self._basis = Q.T
         else:
-            self._basis = special_ortho_group.rvs(dim, random_state=self._rng)
+            self._basis = _random_orthogonal(dim, self._rng)
 
         # -- Threshold-based sigma adaptation ----------------------------
         safe_lipschitz = np.maximum(self._lipschitz, 1e-12)

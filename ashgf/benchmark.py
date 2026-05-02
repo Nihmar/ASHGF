@@ -11,6 +11,7 @@ import csv
 import logging
 import os
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
 
 import numpy as np
@@ -88,6 +89,51 @@ def _make_algorithm(
 # ---------------------------------------------------------------------------
 
 
+def _run_benchmark_task(
+    algo_name: str,
+    func_name: str,
+    dim: int,
+    max_iter: int,
+    seed: int,
+    lr: float,
+    sigma: float,
+    patience: int | None,
+    ftol: float | None,
+) -> tuple[str, str, dict[str, Any]]:
+    """Run a single (algorithm, function) pair — picklable for ProcessPoolExecutor."""
+    f = get_function(func_name)
+    t_start = time.perf_counter()
+    try:
+        algo_run = _make_algorithm(algo_name, seed=seed, lr=lr, sigma=sigma)
+        best_vals, all_vals = algo_run.optimize(
+            f,
+            dim=dim,
+            max_iter=max_iter,
+            debug=False,
+            patience=patience,
+            ftol=ftol,
+        )
+        elapsed = time.perf_counter() - t_start
+        result = {
+            "best": best_vals[-1][1] if best_vals else float("nan"),
+            "final": all_vals[-1] if all_vals else float("nan"),
+            "values": all_vals,
+            "iterations": len(all_vals),
+            "elapsed": elapsed,
+        }
+    except Exception as e:
+        elapsed = time.perf_counter() - t_start
+        result = {
+            "best": float("nan"),
+            "final": float("nan"),
+            "values": [],
+            "iterations": 0,
+            "elapsed": elapsed,
+            "error": str(e),
+        }
+    return algo_name, func_name, result
+
+
 def benchmark(
     functions: list[str] | None = None,
     algorithms: list[str] | None = None,
@@ -101,6 +147,7 @@ def benchmark(
     pattern: str | None = None,
     patience: int | None = None,
     ftol: float | None = None,
+    n_jobs: int = 1,
 ) -> dict[str, dict[str, dict[str, Any]]]:
     """Run a full benchmark across functions and algorithms.
 
@@ -150,55 +197,65 @@ def benchmark(
 
     results: dict[str, dict[str, dict[str, Any]]] = {algo: {} for algo in algorithms}
 
-    for algo_name in algorithms:
-        for func_name in functions:
-            f = get_function(func_name)
+    # Build flat list of tasks
+    tasks = [
+        (algo_name, func_name, dim, max_iter, seed, lr, sigma, patience, ftol)
+        for algo_name in algorithms
+        for func_name in functions
+    ]
 
+    if n_jobs > 1:
+        # Parallel execution via ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+            futures = {
+                executor.submit(_run_benchmark_task, *task): task[:2]
+                for task in tasks
+            }
+            for fut in as_completed(futures):
+                algo_name, func_name = futures[fut]
+                try:
+                    a_name, f_name, result = fut.result()
+                    if debug:
+                        logger.info(
+                            "Benchmark %-6s on %-35s dim=%-4d max_iter=%d (elapsed=%.2fs)",
+                            a_name,
+                            f_name,
+                            dim,
+                            max_iter,
+                            result.get("elapsed", 0),
+                        )
+                    results[a_name][f_name] = result
+                except Exception as e:
+                    logger.error(
+                        "Benchmark %-6s on %-35s FAILED: %s",
+                        algo_name,
+                        func_name,
+                        e,
+                    )
+                    results[algo_name][func_name] = {
+                        "best": float("nan"),
+                        "final": float("nan"),
+                        "values": [],
+                        "iterations": 0,
+                        "elapsed": 0.0,
+                        "error": str(e),
+                    }
+    else:
+        # Sequential execution (original behaviour)
+        for algo_name, func_name, _, _, _, _, _, _, _ in tasks:
+            a_name, f_name, result = _run_benchmark_task(
+                algo_name, func_name, dim, max_iter, seed, lr, sigma, patience, ftol
+            )
             if debug:
                 logger.info(
-                    "Benchmark %-6s on %-35s dim=%-4d max_iter=%d",
-                    algo_name,
-                    func_name,
+                    "Benchmark %-6s on %-35s dim=%-4d max_iter=%d (elapsed=%.2fs)",
+                    a_name,
+                    f_name,
                     dim,
                     max_iter,
+                    result.get("elapsed", 0),
                 )
-
-            t_start = time.perf_counter()
-            try:
-                # Re-instantiate with the same seed for reproducibility
-                algo_run = _make_algorithm(algo_name, seed=seed, lr=lr, sigma=sigma)
-                best_vals, all_vals = algo_run.optimize(
-                    f,
-                    dim=dim,
-                    max_iter=max_iter,
-                    debug=False,
-                    patience=patience,
-                    ftol=ftol,
-                )
-                elapsed = time.perf_counter() - t_start
-
-                results[algo_name][func_name] = {
-                    "best": best_vals[-1][1] if best_vals else float("nan"),
-                    "final": all_vals[-1] if all_vals else float("nan"),
-                    "values": all_vals,
-                    "iterations": len(all_vals),
-                    "elapsed": elapsed,
-                }
-            except Exception as e:
-                logger.error(
-                    "Benchmark %-6s on %-35s FAILED: %s",
-                    algo_name,
-                    func_name,
-                    e,
-                )
-                results[algo_name][func_name] = {
-                    "best": float("nan"),
-                    "final": float("nan"),
-                    "values": [],
-                    "iterations": 0,
-                    "elapsed": time.perf_counter() - t_start,
-                    "error": str(e),
-                }
+            results[a_name][f_name] = result
 
     # Optionally write CSV files
     if output_dir is not None:
@@ -251,6 +308,31 @@ def print_benchmark_summary(
 # ---------------------------------------------------------------------------
 
 
+def _run_stats_task(
+    algo_name: str,
+    function: str,
+    dim: int,
+    max_iter: int,
+    run_seed: int,
+    lr: float,
+    sigma: float,
+    patience: int | None,
+    ftol: float | None,
+) -> tuple[str, list[float]]:
+    """Run a single (algorithm, seed) trial — picklable for ProcessPoolExecutor."""
+    f = get_function(function)
+    algo = _make_algorithm(algo_name, seed=run_seed, lr=lr, sigma=sigma)
+    _best_vals, all_vals = algo.optimize(
+        f,
+        dim=dim,
+        max_iter=max_iter,
+        debug=False,
+        patience=patience,
+        ftol=ftol,
+    )
+    return algo_name, all_vals
+
+
 def statistics(
     function: str,
     algorithms: list[str] | None = None,
@@ -264,6 +346,7 @@ def statistics(
     debug: bool = True,
     patience: int | None = None,
     ftol: float | None = None,
+    n_jobs: int = 1,
 ) -> dict[str, dict[str, Any]]:
     """Run multiple independent trials and compute convergence statistics.
 
@@ -313,37 +396,73 @@ def statistics(
         all_sequences: list[list[float]] = []
         best_finals: list[float] = []
 
-        for run in range(n_runs):
-            run_seed = seed + run
-            if debug:
-                logger.info(
-                    "Stats %-6s on %-35s run %3d/%d",
-                    algo_name,
-                    function,
-                    run + 1,
-                    n_runs,
-                )
+        # Build task list: (algo_name, function, dim, max_iter, run_seed, lr, sigma, patience, ftol)
+        run_tasks = [
+            (algo_name, function, dim, max_iter, seed + run, lr, sigma, patience, ftol)
+            for run in range(n_runs)
+        ]
 
-            try:
-                algo = _make_algorithm(algo_name, seed=run_seed, lr=lr, sigma=sigma)
-                _best_vals, all_vals = algo.optimize(
-                    f,
-                    dim=dim,
-                    max_iter=max_iter,
-                    debug=False,
-                    patience=patience,
-                    ftol=ftol,
-                )
-                all_sequences.append(all_vals)
-                best_finals.append(min(all_vals) if all_vals else float("nan"))
-            except Exception as e:
-                logger.error(
-                    "Stats %-6s on %-35s run %d FAILED: %s",
-                    algo_name,
-                    function,
-                    run,
-                    e,
-                )
+        if n_jobs > 1:
+            with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                futures = {
+                    executor.submit(_run_stats_task, *task): task[4]
+                    for task in run_tasks
+                }
+                for fut in as_completed(futures):
+                    run_seed = futures[fut]
+                    run_idx = run_seed - seed
+                    try:
+                        a_name, all_vals = fut.result()
+                        if debug:
+                            logger.info(
+                                "Stats %-6s on %-35s run %3d/%d",
+                                a_name,
+                                function,
+                                run_idx + 1,
+                                n_runs,
+                            )
+                        all_sequences.append(all_vals)
+                        best_finals.append(min(all_vals) if all_vals else float("nan"))
+                    except Exception as e:
+                        logger.error(
+                            "Stats %-6s on %-35s run %d FAILED: %s",
+                            algo_name,
+                            function,
+                            run_idx,
+                            e,
+                        )
+        else:
+            for run in range(n_runs):
+                run_seed = seed + run
+                if debug:
+                    logger.info(
+                        "Stats %-6s on %-35s run %3d/%d",
+                        algo_name,
+                        function,
+                        run + 1,
+                        n_runs,
+                    )
+
+                try:
+                    algo = _make_algorithm(algo_name, seed=run_seed, lr=lr, sigma=sigma)
+                    _best_vals, all_vals = algo.optimize(
+                        f,
+                        dim=dim,
+                        max_iter=max_iter,
+                        debug=False,
+                        patience=patience,
+                        ftol=ftol,
+                    )
+                    all_sequences.append(all_vals)
+                    best_finals.append(min(all_vals) if all_vals else float("nan"))
+                except Exception as e:
+                    logger.error(
+                        "Stats %-6s on %-35s run %d FAILED: %s",
+                        algo_name,
+                        function,
+                        run,
+                        e,
+                    )
 
         if not all_sequences:
             stats[algo_name] = {
@@ -546,6 +665,7 @@ def benchmark_multi(
     pattern: str | None = None,
     patience: int | None = None,
     ftol: float | None = None,
+    n_jobs: int = 1,
 ) -> dict[int, dict[str, dict[str, dict[str, Any]]]]:
     """Run benchmark across multiple dimensions.
 
@@ -572,6 +692,7 @@ def benchmark_multi(
             pattern=pattern,
             patience=patience,
             ftol=ftol,
+            n_jobs=n_jobs,
         )
 
     return all_results

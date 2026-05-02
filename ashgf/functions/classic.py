@@ -18,6 +18,19 @@ import math
 import numpy as np
 
 # ---------------------------------------------------------------------------
+# Cache for commonly reused index arrays
+# ---------------------------------------------------------------------------
+_ARR_CACHE: dict[int, np.ndarray] = {}
+
+
+def _cached_arange(n: int) -> np.ndarray:
+    """Return np.arange(1, n + 1), cached per n."""
+    if n not in _ARR_CACHE:
+        _ARR_CACHE[n] = np.arange(1, n + 1, dtype=np.float64)
+    return _ARR_CACHE[n]
+
+
+# ---------------------------------------------------------------------------
 # Classical benchmark functions
 # ---------------------------------------------------------------------------
 
@@ -129,7 +142,7 @@ def griewank(x: np.ndarray) -> float:
     """
     n: int = len(x)
     term_1: float = (1.0 / 4000.0) * np.sum(x**2)
-    term_2: float = float(np.prod(np.cos(x / np.sqrt(np.arange(1, n + 1)))))
+    term_2: float = float(np.prod(np.cos(x / np.sqrt(_cached_arange(n)))))
     return float(term_1 - term_2 + 1.0)
 
 
@@ -222,7 +235,7 @@ def sum_of_different_powers(x: np.ndarray) -> float:
         Function value.
     """
     n: int = len(x)
-    exponents: np.ndarray = np.arange(2, n + 2)
+    exponents: np.ndarray = _cached_arange(n + 1)[1:]
     return float(np.sum(np.abs(x) ** exponents))
 
 
@@ -273,7 +286,7 @@ def zakharov(x: np.ndarray) -> float:
         Function value.
     """
     n: int = len(x)
-    i = np.arange(1, n + 1)
+    i = _cached_arange(n)
     half_sum = 0.5 * np.sum(i * x)
     term_1: float = float(np.sum(x**2))
     term_2: float = float(half_sum**2)

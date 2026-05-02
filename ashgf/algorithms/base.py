@@ -96,10 +96,12 @@ class BaseOptimizer(ABC):
         else:
             x = np.copy(x_init)
 
-        # Storage
-        steps: dict[int, tuple[np.ndarray, float]] = {}
+        # Storage — pre-allocated arrays (faster than dict[tuple])
+        all_values_arr: np.ndarray = np.empty(max_iter + 1)
         current_val = f(x)
-        steps[0] = (x, current_val)
+        all_values_arr[0] = current_val
+        x_prev: np.ndarray = x.copy()
+        f_prev: float = current_val
 
         best_value = current_val
         best_values: list[tuple[np.ndarray, float]] = [(x.copy(), best_value)]
@@ -146,24 +148,24 @@ class BaseOptimizer(ABC):
                 # 2. Update x
                 step_size = self._get_step_size()
                 if maximize:
-                    x = x + step_size * grad
+                    x_new = x + step_size * grad
                 else:
-                    x = x - step_size * grad
+                    x_new = x - step_size * grad
 
                 # Guard against NaN/inf in x
-                if not np.all(np.isfinite(x)):
+                if not np.all(np.isfinite(x_new)):
                     logger.warning("iter=%d: x contains NaN/inf — terminating", i)
                     break
 
-                current_val = f(x)
+                current_val = f(x_new)
 
                 # Guard against NaN/inf in function value
                 if not np.isfinite(current_val):
                     logger.warning("iter=%d: f(x) = %s — terminating", i, current_val)
-                    steps[i] = (x.copy(), current_val)
+                    all_values_arr[i] = current_val
                     break
 
-                steps[i] = (x.copy(), current_val)
+                all_values_arr[i] = current_val
 
                 # 3. Track best
                 improved = False
@@ -171,7 +173,7 @@ class BaseOptimizer(ABC):
                     not maximize and current_val < best_value
                 ):
                     best_value = current_val
-                    best_values.append((x.copy(), best_value))
+                    best_values.append((x_new.copy(), best_value))
                     improved = True
 
                 # 4a. Stagnation detection (early stopping)
@@ -180,7 +182,7 @@ class BaseOptimizer(ABC):
                         _stall_count = 0
                         _best_so_far = best_value
                     elif ftol is not None:
-                        if abs(current_val - steps[i - 1][1]) < ftol:
+                        if abs(current_val - f_prev) < ftol:
                             _stall_count += 1
                         else:
                             _stall_count = 0
@@ -195,20 +197,29 @@ class BaseOptimizer(ABC):
                         )
                         break
 
-                # 4b. Check convergence (step size)
-                if la.norm(x - steps[i - 1][0]) < self.eps:
-                    logger.info("Converged at iteration %d (step < eps)", i)
-                    break
+                # 4b. Check convergence (step size) — use max norm (faster than L2)
+                #     Only check every 5 iterations to reduce overhead
+                if i % 5 == 0:
+                    max_step = float(np.max(np.abs(x_new - x_prev)))
+                    if max_step < self.eps:
+                        logger.info("Converged at iteration %d (step < eps)", i)
+                        x_prev = x_new
+                        f_prev = current_val
+                        break
+
+                x_prev = x_new
+                f_prev = current_val
+                x = x_new
 
                 # 5. Hook: post-iteration (e.g., parameter adaptation)
-                self._post_iteration(i, x, grad, steps[i - 1][1])
+                self._post_iteration(i, x, grad, f_prev)
 
             except Exception:
                 logger.exception("Error at iteration %d", i)
                 break
 
         if debug:
-            last_val = steps[actual_iter][1]
+            last_val = all_values_arr[actual_iter]
             logger.info(
                 "final  f(x)=%.6e  iter=%d  best=%.6e  stalled=%d",
                 last_val,
@@ -217,7 +228,7 @@ class BaseOptimizer(ABC):
                 _stall_count if patience else 0,
             )
 
-        all_values = [steps[j][1] for j in range(actual_iter)]
+        all_values = all_values_arr[:actual_iter].tolist()
         return best_values, all_values
 
     # ------------------------------------------------------------------

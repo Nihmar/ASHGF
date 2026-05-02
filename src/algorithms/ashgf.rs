@@ -1,0 +1,361 @@
+//! Adaptive Stochastic Historical Gradient-Free (ASHGF) optimiser.
+//!
+//! ASHGF extends ASGF by incorporating a gradient history buffer, similar
+//! to how SGES extends GD.  It uses Gauss-Hermite quadrature for gradient
+//! estimation with directions that mix the gradient subspace (estimated
+//! from past gradients) with random orthogonal directions.
+
+use ndarray::{Array1, Array2};
+use ndarray_linalg::{Norm, QR};
+use rand::Rng;
+use rand_distr::StandardNormal;
+
+use crate::algorithms::base::Optimizer;
+use crate::gradient::{
+    compute_directions_ashgf, estimate_lipschitz_constants, gauss_hermite_derivative,
+    random_orthogonal,
+};
+use crate::utils::SeededRng;
+
+/// Adaptive Stochastic Historical Gradient-Free optimiser.
+///
+/// Combines SGES-style gradient history buffer with ASGF-style
+/// Gauss-Hermite quadrature and parameter adaptation.
+pub struct ASHGF {
+    // -- Quadrature & adaptation --
+    pub m: usize,
+    pub a_init: f64,
+    pub b_init: f64,
+    pub a_minus: f64,
+    pub a_plus: f64,
+    pub b_minus: f64,
+    pub b_plus: f64,
+    pub gamma_l: f64,
+    pub gamma_sigma_minus: f64,
+    pub gamma_sigma_plus: f64,
+    pub r_init: usize,
+    pub ro: f64,
+    pub sigma_zero_ref: f64,
+
+    // -- Gradient history --
+    pub k1: f64,
+    pub k2: f64,
+    pub alpha_init: f64,
+    pub delta: f64,
+    pub t: usize,
+
+    eps: f64,
+
+    // -- Adaptive state --
+    sigma: f64,
+    sigma_zero: f64,
+    a: f64,
+    b: f64,
+    r: usize,
+    l_nabla: f64,
+    lipschitz: Option<Array1<f64>>,
+    basis: Option<Array2<f64>>,
+    last_derivatives: Option<Array1<f64>>,
+
+    // -- Gradient history state --
+    current_alpha: f64,
+    G_buffer: Option<Array2<f64>>,
+    G_count: usize,
+    G_idx: usize,
+    M: usize,
+    last_evaluations: Option<Array2<f64>>,
+}
+
+impl ASHGF {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        m: usize,
+        a: f64,
+        b: f64,
+        a_minus: f64,
+        a_plus: f64,
+        b_minus: f64,
+        b_plus: f64,
+        gamma_l: f64,
+        gamma_sigma_minus: f64,
+        gamma_sigma_plus: f64,
+        r: usize,
+        ro: f64,
+        sigma_zero: f64,
+        k1: f64,
+        k2: f64,
+        alpha: f64,
+        delta: f64,
+        t: usize,
+        eps: f64,
+    ) -> Self {
+        assert!(m % 2 == 1, "m must be odd");
+        assert!(k2 <= k1);
+        Self {
+            m,
+            a_init: a,
+            b_init: b,
+            a_minus,
+            a_plus,
+            b_minus,
+            b_plus,
+            gamma_l,
+            gamma_sigma_minus,
+            gamma_sigma_plus,
+            r_init: r,
+            ro,
+            sigma_zero_ref: sigma_zero,
+            k1,
+            k2,
+            alpha_init: alpha,
+            delta,
+            t,
+            eps,
+            sigma: sigma_zero,
+            sigma_zero,
+            a,
+            b,
+            r,
+            l_nabla: 0.0,
+            lipschitz: None,
+            basis: None,
+            last_derivatives: None,
+            current_alpha: alpha,
+            G_buffer: None,
+            G_count: 0,
+            G_idx: 0,
+            M: 0,
+            last_evaluations: None,
+        }
+    }
+
+    /// Update alpha based on relative performance of gradient vs random directions.
+    ///
+    /// `alpha` is the probability of choosing a **random** direction.
+    /// * `r < r_hat` → gradient subspace better → decrease alpha (favour gradient).
+    /// * `r >= r_hat` → random better → increase alpha (more exploration).
+    fn update_alpha(&mut self, dim: usize) {
+        let evaluations = match &self.last_evaluations {
+            Some(ev) => ev,
+            None => return,
+        };
+        let M = self.M;
+
+        if M == 0 || M >= dim {
+            return;
+        }
+
+        // Min per direction (over quadrature points)
+        let min_per_dir = evaluations.map_axis(ndarray::Axis(1), |row| {
+            row.fold(f64::INFINITY, |a, &b| a.min(b))
+        });
+
+        let r = min_per_dir.slice(ndarray::s![..M]).mean().unwrap();
+        let r_hat = min_per_dir.slice(ndarray::s![M..]).mean().unwrap();
+
+        if r < r_hat {
+            self.current_alpha = (self.current_alpha / self.delta).max(self.k2);
+        } else {
+            self.current_alpha = (self.delta * self.current_alpha).min(self.k1);
+        }
+    }
+}
+
+impl Optimizer for ASHGF {
+    fn kind(&self) -> &'static str {
+        "ASHGF"
+    }
+
+    fn eps(&self) -> f64 {
+        self.eps
+    }
+
+    fn step_size(&self) -> f64 {
+        if self.l_nabla < 1e-12 {
+            self.sigma
+        } else {
+            self.sigma / self.l_nabla
+        }
+    }
+
+    fn setup(&mut self, _f: &(dyn Fn(&Array1<f64>) -> f64 + Sync), dim: usize, x: &Array1<f64>) {
+        let x_norm = x.norm();
+        if x_norm > 0.0 {
+            self.sigma = (x_norm / 10.0).max(1e-6);
+        } else {
+            self.sigma = self.sigma_zero_ref;
+        }
+        self.sigma_zero = self.sigma;
+        self.a = self.a_init;
+        self.b = self.b_init;
+        self.r = self.r_init;
+        self.l_nabla = 0.0;
+        self.lipschitz = Some(Array1::ones(dim));
+        self.M = dim;
+
+        let seed = x
+            .iter()
+            .fold(0u64, |a, &v| a.wrapping_add(v.to_bits()))
+            .max(1);
+        let mut local_rng = SeededRng::new(seed);
+        self.basis = Some(random_orthogonal(dim, &mut local_rng));
+
+        self.G_buffer = Some(Array2::zeros((self.t, dim)));
+        self.G_count = 0;
+        self.G_idx = 0;
+        self.current_alpha = self.alpha_init;
+    }
+
+    fn post_iteration(
+        &mut self,
+        iteration: usize,
+        _x: &Array1<f64>,
+        grad: &Array1<f64>,
+        _f_val: f64,
+    ) {
+        let derivatives = match &self.last_derivatives {
+            Some(d) => d.clone(),
+            None => return,
+        };
+        let dim = grad.len();
+        let has_history = self.G_count >= self.t;
+
+        // 1. Alpha update
+        if has_history && iteration >= self.t + 1 {
+            self.update_alpha(dim);
+        }
+
+        // 2. Reset check
+        if self.r > 0 && self.sigma < self.ro * self.sigma_zero {
+            let seed = grad
+                .iter()
+                .fold(0u64, |a, &v| a.wrapping_add(v.to_bits()))
+                .max(1);
+            let mut local_rng = SeededRng::new(seed);
+            self.basis = Some(random_orthogonal(dim, &mut local_rng));
+            self.sigma = self.sigma_zero;
+            self.a = self.a_init;
+            self.b = self.b_init;
+            self.r -= 1;
+            self.M = dim / 2;
+            return;
+        }
+
+        // 3. Basis update (only during warm-up; after, grad_estimator handles it)
+        if !has_history {
+            self.M = dim / 2;
+            let seed = grad
+                .iter()
+                .fold(0u64, |a, &v| a.wrapping_add(v.to_bits()))
+                .max(1);
+            let mut local_rng = SeededRng::new(seed);
+            self.basis = Some(random_orthogonal(dim, &mut local_rng));
+        }
+
+        // 4. Sigma adaptation
+        let lips = self.lipschitz.as_ref().unwrap();
+        let safe_ratio = derivatives.mapv(|v| v.abs()) / &lips.mapv(|v| v.max(1e-12));
+        let value = safe_ratio.fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+        if value < self.a {
+            self.sigma *= self.gamma_sigma_minus;
+            self.a *= self.a_minus;
+        } else if value > self.b {
+            self.sigma *= self.gamma_sigma_plus;
+            self.b *= self.b_plus;
+        } else {
+            self.a *= self.a_plus;
+            self.b *= self.b_minus;
+        }
+    }
+
+    fn grad_estimator(
+        &mut self,
+        x: &Array1<f64>,
+        f: &(dyn Fn(&Array1<f64>) -> f64 + Sync),
+        rng: &mut SeededRng,
+    ) -> Array1<f64> {
+        let dim = x.len();
+        let fx = f(x);
+
+        // Determine basis
+        let basis = if self.G_count >= self.t {
+            // Use gradient history
+            let G_slice = self
+                .G_buffer
+                .as_ref()
+                .unwrap()
+                .slice(ndarray::s![..self.G_count, ..]);
+            let (directions, M) =
+                compute_directions_ashgf(dim, &G_slice.to_owned(), self.current_alpha, self.M, rng);
+            self.M = M;
+            let (q, _r) = directions
+                .t()
+                .qr()
+                .expect("QR failed in ASHGF::grad_estimator");
+            q
+        } else {
+            self.basis.as_ref().unwrap().clone()
+        };
+        self.basis = Some(basis.clone());
+
+        // Gauss-Hermite quadrature
+        let (grad, evaluations, nodes, derivatives) =
+            gauss_hermite_derivative(x, f, self.sigma, &basis, self.m, Some(fx));
+
+        // Lipschitz constants
+        self.lipschitz = Some(estimate_lipschitz_constants(
+            &evaluations,
+            &nodes,
+            self.sigma,
+        ));
+
+        // L_nabla from first M directions
+        let M_eff = self.M.max(1);
+        let max_lip_M = self
+            .lipschitz
+            .as_ref()
+            .unwrap()
+            .slice(ndarray::s![..M_eff])
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        self.l_nabla = (1.0 - self.gamma_l) * max_lip_M + self.gamma_l * self.l_nabla;
+
+        self.last_derivatives = Some(derivatives);
+        self.last_evaluations = Some(evaluations);
+
+        // Update gradient buffer
+        if let Some(ref mut buf) = self.G_buffer {
+            buf.row_mut(self.G_idx).assign(&grad);
+            self.G_idx = (self.G_idx + 1) % self.t;
+            self.G_count = (self.G_count + 1).min(self.t);
+        }
+
+        grad
+    }
+}
+
+impl Default for ASHGF {
+    fn default() -> Self {
+        Self::new(
+            5,
+            0.1,
+            0.9,
+            0.95,
+            1.02,
+            0.98,
+            1.01,
+            0.9,
+            0.9,
+            1.0 / 0.9,
+            10,
+            0.01,
+            0.01,
+            0.9,
+            0.1,
+            0.5,
+            1.1,
+            50,
+            1e-8,
+        )
+    }
+}

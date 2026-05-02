@@ -16,7 +16,45 @@ __all__ = [
     "compute_directions",
     "compute_directions_sges",
     "compute_directions_ashgf",
+    "_random_orthogonal",
 ]
+
+
+def _random_orthogonal(
+    dim: int,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Generate a random ``(dim, dim)`` orthonormal matrix via QR decomposition.
+
+    This is a **significantly faster** alternative to
+    :func:`scipy.stats.special_ortho_group.rvs`.  Instead of using the
+    Haar-measure correction (which requires an extra diagonal sign-flip
+    pass), we simply compute the Q factor of a matrix with i.i.d.
+    standard-normal entries.  The resulting matrix is orthonormal and
+    uniformly distributed over the orthogonal group O(d) (rather than
+    SO(d)), which is perfectly adequate for direction sampling in
+    derivative-free optimisation.
+
+    Parameters
+    ----------
+    dim : int
+        Dimension of the square matrix.
+    rng : np.random.Generator or None
+        Random number generator.  If ``None``, uses the global
+        :data:`numpy.random` state.
+
+    Returns
+    -------
+    np.ndarray, shape (dim, dim)
+        Orthonormal matrix whose rows form an orthonormal basis of
+        :math:`\\mathbb{R}^d`.
+    """
+    if rng is not None:
+        M = rng.standard_normal((dim, dim))
+    else:
+        M = np.random.randn(dim, dim)
+    Q, _ = np.linalg.qr(M)
+    return Q
 
 
 def compute_directions(dim: int) -> np.ndarray:

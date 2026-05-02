@@ -134,13 +134,14 @@ def gaussian_smoothing(
 
     # Pre-scale directions
     sigma_dirs = sigma * directions  # (M, d)
+    dim = len(x)
 
-    # Build flat list of all perturbed points (interleaved: +σd, -σd, ...)
-    points: list[np.ndarray] = []
-    for i in range(M):
-        d = sigma_dirs[i]
-        points.append(x + d)
-        points.append(x - d)
+    # Build all perturbed points via broadcasting (no Python loop)
+    # all_arr[0::2] = x + sigma_dirs, all_arr[1::2] = x - sigma_dirs
+    all_arr = np.empty((2 * M, dim))
+    all_arr[0::2] = x[None, :] + sigma_dirs
+    all_arr[1::2] = x[None, :] - sigma_dirs
+    points = list(all_arr)  # list of (dim,) views
 
     # Evaluate (parallel if n_jobs > 1)
     results = _parallel_eval(f, points, n_jobs=n_jobs)
@@ -214,15 +215,13 @@ def gauss_hermite_derivative(
     # Pre-compute scale factor for the quadrature
     quad_scale = 2.0 / (sigma * np.sqrt(math.pi))
 
-    # ---- Build flat list of all non-central perturbed points ----
-    # We evaluate f at x + sigma * p_k * b_i  for i in [0..d-1], k != mid.
-    idx_map: list[tuple[int, int]] = []
-    flat_points: list[np.ndarray] = []
-    for i in range(dim):
-        for k in range(m):
-            if k != mid:
-                flat_points.append(x + sigma_p[k] * basis[i])
-                idx_map.append((i, k))
+    # ---- Build all non-central perturbed points via broadcasting ----
+    # Shape: (dim, m, dim) → select k != mid → (dim, m-1, dim) → flatten
+    perturbed = x[None, None, :] + sigma_p[None, :, None] * basis[:, None, :]
+    k_mask = np.ones(m, dtype=bool)
+    k_mask[mid] = False
+    flat_arr = perturbed[:, k_mask, :].reshape(-1, dim)
+    flat_points = list(flat_arr)
 
     # ---- Evaluate all points (parallel if ASHGF_N_JOBS > 1) ----
     flat_results = _parallel_eval(f, flat_points)
@@ -231,9 +230,9 @@ def gauss_hermite_derivative(
     # Fill central column with f(x); other entries from flat_results.
     evals_matrix = np.empty((dim, m))
     evals_matrix[:, mid] = value_at_x
-
-    for idx_flat, (i, k) in enumerate(idx_map):
-        evals_matrix[i, k] = flat_results[idx_flat]
+    # Reshape flat results to (dim, m-1) and assign to non-mid columns
+    flat_reshaped = np.asarray(flat_results).reshape(dim, m - 1)
+    evals_matrix[:, k_mask] = flat_reshaped
 
     # ---- Compute directional derivatives (vectorised) ----
     # derivatives[i] = quad_scale · Σ_k p_w[k] · evals_matrix[i, k]
