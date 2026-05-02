@@ -50,13 +50,15 @@ class BaseOptimizer(ABC):
         debug: bool = True,
         log_interval: int = 25,
         maximize: bool = False,
+        patience: int | None = None,
+        ftol: float | None = None,
     ) -> tuple[list[tuple[np.ndarray, float]], list[float]]:
         """Run the optimization loop.
 
         Parameters
         ----------
         f : callable
-            Objective function f: R^d → R.
+            Objective function f: R^d -> R.
         dim : int
             Problem dimension.
         max_iter : int
@@ -69,6 +71,14 @@ class BaseOptimizer(ABC):
             Print/log progress every ``log_interval`` iterations.
         maximize : bool
             If True, maximize f instead of minimizing (for RL).
+        patience : int or None
+            If set, stop early when the best function value has not
+            improved for ``patience`` consecutive iterations.
+            Useful to prevent oscillations after convergence.
+        ftol : float or None
+            If set, stop when ``|f(x_{k+1}) - f(x_k)| < ftol`` for
+            ``patience`` consecutive iterations (requires ``patience``
+            to also be set).
 
         Returns
         -------
@@ -94,13 +104,18 @@ class BaseOptimizer(ABC):
         best_value = current_val
         best_values: list[tuple[np.ndarray, float]] = [(x.copy(), best_value)]
 
+        # Early-stopping state (stagnation detection)
+        _stall_count: int = 0
+        _best_so_far: float = current_val
+
         if debug:
             logger.info(
-                "algorithm=%-6s dim=%-4d init_val=%.6e max_iter=%d",
+                "algorithm=%-6s dim=%-4d init_val=%.6e max_iter=%d%s",
                 self.kind,
                 dim,
                 current_val,
                 max_iter,
+                f" patience={patience}" if patience else "",
             )
 
         # ---- Hook: pre-iteration setup ----
@@ -151,13 +166,36 @@ class BaseOptimizer(ABC):
                 steps[i] = (x.copy(), current_val)
 
                 # 3. Track best
+                improved = False
                 if (maximize and current_val > best_value) or (
                     not maximize and current_val < best_value
                 ):
                     best_value = current_val
                     best_values.append((x.copy(), best_value))
+                    improved = True
 
-                # 4. Check convergence
+                # 4a. Stagnation detection (early stopping)
+                if patience is not None and patience > 0:
+                    if improved:
+                        _stall_count = 0
+                        _best_so_far = best_value
+                    elif ftol is not None:
+                        if abs(current_val - steps[i - 1][1]) < ftol:
+                            _stall_count += 1
+                        else:
+                            _stall_count = 0
+                    else:
+                        _stall_count += 1
+
+                    if _stall_count >= patience:
+                        logger.info(
+                            "Stopped at iteration %d (no improvement for %d iters)",
+                            i,
+                            patience,
+                        )
+                        break
+
+                # 4b. Check convergence (step size)
                 if la.norm(x - steps[i - 1][0]) < self.eps:
                     logger.info("Converged at iteration %d (step < eps)", i)
                     break
@@ -172,10 +210,11 @@ class BaseOptimizer(ABC):
         if debug:
             last_val = steps[actual_iter][1]
             logger.info(
-                "final  f(x)=%.6e  iter=%d  best=%.6e",
+                "final  f(x)=%.6e  iter=%d  best=%.6e  stalled=%d",
                 last_val,
                 actual_iter,
                 best_value,
+                _stall_count if patience else 0,
             )
 
         all_values = [steps[j][1] for j in range(actual_iter)]

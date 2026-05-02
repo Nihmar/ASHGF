@@ -8,7 +8,7 @@ from typing import Callable
 import numpy as np
 
 from ashgf.algorithms.base import BaseOptimizer
-from ashgf.gradient.estimators import gaussian_smoothing
+from ashgf.gradient.estimators import _parallel_eval, gaussian_smoothing
 from ashgf.gradient.sampling import compute_directions, compute_directions_sges
 
 logger = logging.getLogger(__name__)
@@ -76,15 +76,19 @@ class SGES(BaseOptimizer):
         self.delta = delta
         self.t = t
 
-        # Internal state
-        self._G: list[np.ndarray] = []
+        # Internal state — circular buffer for gradient history
+        self._G_buffer: np.ndarray | None = None  # (t, dim) pre-allocated
+        self._G_count: int = 0  # number of gradients stored so far
+        self._G_idx: int = 0  # next write position
         self._current_alpha = alpha
 
     def _get_step_size(self) -> float:
         return self.lr
 
     def _setup(self, f: Callable[[np.ndarray], float], dim: int, x: np.ndarray) -> None:
-        self._G = []
+        self._G_buffer = np.zeros((self.t, dim))
+        self._G_count = 0
+        self._G_idx = 0
         self._current_alpha = self.alpha
 
     def _post_iteration(
@@ -132,21 +136,31 @@ class SGES(BaseOptimizer):
 
         # Use SGES directions once we have at least t-1 gradients in the buffer
         # (matching original code behavior: at iteration t, G has t-1 entries)
-        if len(self._G) >= self.t - 1:
+        if self._G_count >= self.t - 1:
             # Use SGES directions mixing gradients + random
-            directions, M = compute_directions_sges(dim, self._G, self._current_alpha)
+            directions, M = compute_directions_sges(
+                dim, self._G_buffer[: self._G_count], self._current_alpha
+            )
             self._last_M = M
 
             # Collect evaluations for alpha update
-            evaluations: list[float] = []
+            sigma_dirs = self.sigma * directions  # (dim, dim) pre-scaled
+            points: list[np.ndarray] = []
+            for i in range(dim):
+                d = sigma_dirs[i]
+                points.append(x + d)
+                points.append(x - d)
+
+            # Evaluate (parallel if ASHGF_N_JOBS > 1)
+            results = _parallel_eval(f, points)
+            evaluations = np.array(results)
+
+            # Assemble gradient
             grad = np.zeros(dim)
             for i in range(dim):
-                d = directions[i].reshape(x.shape)
-                f_plus = f(x + self.sigma * d)
-                f_minus = f(x - self.sigma * d)
-                evaluations.append(f_plus)
-                evaluations.append(f_minus)
-                grad += (f_plus - f_minus) * d.reshape(grad.shape)
+                f_plus = results[2 * i]
+                f_minus = results[2 * i + 1]
+                grad += (f_plus - f_minus) * directions[i]
             grad /= 2 * self.sigma * dim
             self._last_evaluations = evaluations
         else:
@@ -154,11 +168,11 @@ class SGES(BaseOptimizer):
             directions = compute_directions(dim)
             grad = gaussian_smoothing(x, f, self.sigma, directions)
             self._last_M = 0
-            self._last_evaluations = []
+            self._last_evaluations = np.array([])
 
-        # Append to gradient buffer
-        self._G.append(grad.copy())
-        if len(self._G) > self.t:
-            self._G = self._G[1:]
+        # Append to circular gradient buffer
+        self._G_buffer[self._G_idx] = grad
+        self._G_idx = (self._G_idx + 1) % self.t
+        self._G_count = min(self._G_count + 1, self.t)
 
         return grad

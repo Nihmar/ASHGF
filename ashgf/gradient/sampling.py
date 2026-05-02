@@ -107,32 +107,29 @@ def compute_directions_sges(
     # Add Tikhonov regularisation to prevent singular covariance
     cov_L_G += 1e-6 * np.eye(dim)
 
-    # Binary decisions: how many directions come from the gradient subspace
-    choices: int = 0
-    for i in range(dim):
-        choices += int(np.random.choice([0, 1], size=1, p=[alpha, 1.0 - alpha]).item())
-
-    # Clamp choices to the valid range
+    # Vectorised binomial: how many directions come from the gradient subspace
+    choices: int = int(np.random.binomial(dim, 1.0 - alpha))
     choices = max(0, min(choices, dim))
 
-    # --- Gradient-subspace directions ---
+    # --- Gradient-subspace directions (Cholesky + affine transform) ---
     dirs_grad: np.ndarray = np.zeros((choices, dim))
     if choices > 0:
         try:
-            dirs_grad = np.random.multivariate_normal(np.zeros(dim), cov_L_G, choices)
+            # Cholesky factorisation: cov = L @ Lᵀ, then Z @ Lᵀ ~ N(0, cov)
+            L = np.linalg.cholesky(cov_L_G)  # (dim, dim) lower-tri
+            Z = np.random.standard_normal((choices, dim))
+            dirs_grad = np.dot(Z, L.T)  # (choices, dim)
         except (np.linalg.LinAlgError, ValueError):
-            # Fallback: if SVD still fails, use isotropic directions
-            dirs_grad = np.random.randn(choices, dim)
-        # Scale each direction by its empirical std (optional pre-normalization)
-        for i in range(choices):
-            std_i: float = float(np.std(dirs_grad[i]))
-            if std_i > 1e-12:
-                dirs_grad[i] /= std_i
+            # Fallback: if Cholesky still fails, use isotropic directions
+            dirs_grad = np.random.standard_normal((choices, dim))
+        # Vectorised scaling: normalise each direction by its std
+        stds = np.std(dirs_grad, axis=1, keepdims=True)  # (choices, 1)
+        stds = np.where(stds < 1e-12, 1.0, stds)
+        dirs_grad /= stds
 
     # --- Random (isotropic) directions ---
-    dirs_random: np.ndarray = np.random.multivariate_normal(
-        np.zeros(dim), np.identity(dim), dim - choices
-    )
+    n_random = dim - choices
+    dirs_random: np.ndarray = np.random.standard_normal((n_random, dim))
 
     # Assemble the direction matrix
     if choices > 0:

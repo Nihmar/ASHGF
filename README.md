@@ -125,47 +125,55 @@ python -m ashgf run --algo ashgf --function sphere --dim 100 --iter 10000
 
 ### Benchmark (test massivo)
 
-Esegue tutti gli algoritmi su tutte le funzioni (o un sottoinsieme filtrato):
+Esegue **tutti gli algoritmi** su **tutte le funzioni**. I plot vengono salvati
+automaticamente in `results/`. Con `--patience` eviti oscillazioni inutili dopo
+la convergenza.
 
 ```bash
-# Singola dimensione
-python -m ashgf benchmark --dim 100 --iter 1000
+# IL COMANDO PRINCIPALE: tutto, multi-dimensione, con early stopping
+python -m ashgf benchmark --dims "10,100" --iter 500 --patience 50
 
-# Multi-dimensione (10, 100, 1000)
+# Multi-dimensione senza early stopping (1000 iterazioni fisse)
 python -m ashgf benchmark --dims "10,100,1000" --iter 1000
 
-# Con filtro sulle funzioni e solo alcuni algoritmi
-python -m ashgf benchmark \
-    --pattern sphere \
-    --algos gd sges ashgf \
-    --dims "10,100,1000" \
-    --iter 500
+# Singola dimensione, solo funzioni che contengono "rosenbrock"
+python -m ashgf benchmark --dim 100 --pattern rosenbrock --iter 300 --patience 30
 
-# Con output CSV e plot
-python -m ashgf benchmark \
-    --dims "10,100,1000" \
-    --iter 500 \
-    --output results/ \
-    --plot comparison_bars.png \
-    --plot-convergence convergence_grid.png
+# Solo GD e ASHGF, con early stopping piu aggressivo
+python -m ashgf benchmark --algos gd ashgf --dims "10,100" --iter 500 --patience 20
+
+# Early stopping basato su variazione di f(x): fermati se |f(x_k+1)-f(x_k)|<1e-10 per 30 iterazioni
+python -m ashgf benchmark --dims "10,100" --iter 500 --patience 30 --ftol 1e-10
+
+# Directory output personalizzata
+python -m ashgf benchmark --dims "10,100" --iter 300 --output my_results
 ```
+
+**File generati automaticamente** in `results/` (o `--output`):
+
+| File | Contenuto |
+|------|-----------|
+| `results/<algo>_<func>.csv` | Valore di f(x) ad ogni iterazione |
+| `results/comparison_bars.png` | Grafico a barre: miglior f(x) per funzione, algoritmo, dimensione |
+| `results/convergence_grid.png` | Griglia di curve di convergenza (fino a 16 funzioni) |
+| `results/per_function/<func>.png` | **Un PNG per ogni funzione**: grid dettagliato (dimensioni x algoritmi) |
 
 Opzioni del comando `benchmark`:
 
-| Opzione | Descrizione |
-|---------|-------------|
-| `--algos` | Algoritmi da includere (default: tutti) |
-| `--pattern` | Filtro sulle funzioni (substring case-insensitive) |
-| `--dim` | Singola dimensione (default: 100) |
-| `--dims` | Dimensioni multiple, es. `"10,100,1000"` |
-| `--iter` | Iterazioni per run (default: 1000) |
-| `--seed` | Random seed (default: 2003) |
-| `--lr` | Learning rate per GD, SGES, ASEBO |
-| `--sigma` | Smoothing bandwidth |
-| `--output` | Directory per salvare CSV |
-| `--plot` | Salva grafico a barre comparativo |
-| `--plot-convergence` | Salva griglia di curve di convergenza |
-| `--quiet` | Sopprime output di progresso |
+| Opzione | Default | Descrizione |
+|---------|---------|-------------|
+| `--algos` | tutti | `gd`, `sges`, `asgf`, `ashgf`, `asebo` |
+| `--pattern` | — | Filtro sulle funzioni (substring case-insensitive) |
+| `--dim` | 100 | Singola dimensione |
+| `--dims` | — | Dimensioni multiple, es. `"10,100,1000"` |
+| `--iter` | 1000 | Iterazioni massime per run |
+| `--patience` | — | Ferma se nessun miglioramento per N iterazioni |
+| `--ftol` | — | Tolleranza su |f(x_k+1)-f(x_k)| per lo stallo |
+| `--seed` | 2003 | Random seed |
+| `--lr` | 1e-4 | Learning rate (GD, SGES, ASEBO) |
+| `--sigma` | 1e-4 | Smoothing bandwidth (GD, SGES, ASEBO) |
+| `--output` | `results` | Directory output |
+| `--quiet` | — | Sopprime output di progresso |
 
 ### Analisi statistica
 
@@ -203,32 +211,60 @@ Opzioni del comando `stats`:
 ```python
 from ashgf.benchmark import (
     benchmark, benchmark_multi,
-    plot_benchmark_comparison, plot_convergence_grid, plot_statistics,
+    plot_benchmark_comparison, plot_convergence_grid,
+    plot_per_function, plot_statistics,
     print_benchmark_summary, print_benchmark_multi_summary,
     statistics,
 )
 
-# Benchmark multi-dimensione
+# ============================================================
+# Benchmark massivo: tutti gli algoritmi, tutte le funzioni
+# ============================================================
 results = benchmark_multi(
     dims=[10, 100, 1000],
     max_iter=500,
-    pattern="sphere",
+    patience=50,          # early stopping: ferma dopo 50 iter senza miglioramenti
+    # ftol=1e-10,         # opzionale: stallo solo se |f(x_k+1)-f(x_k)| < ftol
 )
 
-# Stampa tabella riassuntiva per ogni dimensione
+# Tabella riassuntiva
 print_benchmark_multi_summary(results)
 
-# Grafico a barre comparativo
-plot_benchmark_comparison(results, output_path="comparison.png")
+# ============================================================
+# Plot automatici
+# ============================================================
+# Grafico a barre: miglior f(x) per funzione, algoritmo, dimensione
+plot_benchmark_comparison(results, output_path="results/comparison_bars.png")
 
-# Griglia di convergenza (funzioni × dimensioni)
-plot_convergence_grid(results, output_path="convergence.png")
+# Griglia compatta: righe = funzioni, colonne = dimensioni
+plot_convergence_grid(results, output_path="results/convergence_grid.png",
+                      max_functions=16)
 
-# Analisi statistica
+# Un PNG per OGNI funzione: grid dettagliato (dimensioni x algoritmi)
+paths = plot_per_function(results, output_dir="results/per_function")
+print(f"Generated {len(paths)} per-function plots")
+
+# ============================================================
+# Analisi statistica (30 run indipendenti)
+# ============================================================
 st = statistics("levy", algorithms=["GD", "SGES", "ASHGF"],
-                dim=50, max_iter=500, n_runs=30)
-plot_statistics(st, "levy", output_path="levy_stats.png")
+                dim=50, max_iter=500, n_runs=30, patience=50)
+print_statistics_summary(st, "levy")
+plot_statistics(st, "levy", output_path="results/levy_stats.png")
 ```
+
+### Valutazione parallela (per funzioni obiettivo costose)
+
+Per ambienti RL o funzioni molto lente, puoi parallelizzare le chiamate a `f`
+impostando la variabile d'ambiente `ASHGF_N_JOBS`:
+
+```bash
+# Usa 4 thread per valutare f in parallelo
+ASHGF_N_JOBS=4 python -m ashgf benchmark --dims 10 --iter 200
+```
+
+L'ottimizzazione vale per tutti gli algoritmi e scala bene con funzioni I/O-bound
+(es. simulatori Gym).
 
 ## Running Tests
 
@@ -244,6 +280,57 @@ pytest tests/ -v
 pytest tests/ -v -m "not slow"
 pytest tests/ --cov=ashgf --cov-report=html
 ```
+
+## Early Stopping
+
+Tutti gli algoritmi ereditano da `BaseOptimizer` i seguenti meccanismi di arresto:
+
+### Meccanismi automatici (sempre attivi)
+
+| Meccanismo | Parametro | Descrizione |
+|-----------|-----------|-------------|
+| **NaN/Inf nel gradiente** | — | Interrompe se il gradiente contiene NaN o Inf |
+| **NaN/Inf in x** | — | Interrompe se il punto degenera |
+| **NaN/Inf in f(x)** | — | Interrompe se f(x) restituisce NaN o Inf |
+| **Convergenza sul passo** | `eps` (default `1e-8`) | Ferma quando `\|x_{k+1} - x_k\| < eps` |
+| **Eccezioni** | — | Qualsiasi eccezione Python interrompe il loop |
+
+### Stagnation detection (`patience` e `ftol`)
+
+Ferma l'ottimizzazione quando il **miglior valore di f(x)** non migliora
+per `patience` iterazioni consecutive. Risolve il problema delle oscillazioni
+dopo la convergenza (tipico di ASHGF e ASGF).
+
+```bash
+# CLI: ferma dopo 30 iterazioni senza miglioramenti
+python -m ashgf run --algo ashgf --function sphere --dim 100 --patience 30
+
+# Con ftol: conta come stallo solo se |f(x_k+1) - f(x_k)| < 1e-10
+python -m ashgf run --algo ashgf --function rastrigin --dim 50 --patience 30 --ftol 1e-10
+```
+
+```python
+# API
+algo = ASHGF(seed=42, eps=1e-6)
+best, all_vals = algo.optimize(
+    sphere, dim=100, max_iter=10000,
+    patience=50,      # ferma dopo 50 iter senza miglioramenti
+    # ftol=1e-12,     # opzionale: soglia su |f(x_{k+1})-f(x_k)|
+)
+```
+
+### Esempio di risparmio
+
+Senza `patience`, ASHGF su `sphere(dim=100)` converge in ~80 iterazioni
+ma continua a oscillare per 900+ iterazioni. Con `--patience 50`:
+
+```
+Senza patience:  final f(x)=3.00e-16  iter=200  (max_iter=200)
+Con patience=50:  Stopped at iteration 87 (no improvement for 50 iters)
+                  final f(x)=1.18e-16  iter=87
+```
+
+**Risparmio: 57% di iterazioni, stesso risultato.**
 
 ## Project Structure
 

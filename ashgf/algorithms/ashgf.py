@@ -242,12 +242,15 @@ class ASHGF(BaseOptimizer):
         self._lipschitz: npt.NDArray[np.floating] | None = None
         self._basis: npt.NDArray[np.floating] | None = None
         self._M: int = 0
-        self._G: list[np.ndarray] = []
+        # Circular buffer for gradient history (t × dim)
+        self._G_buffer: npt.NDArray[np.floating] | None = None
+        self._G_count: int = 0
+        self._G_idx: int = 0
         self._current_alpha: float = self.alpha_init
 
         # Temporary storage between grad_estimator and _post_iteration
         self._last_derivatives: np.ndarray | None = None
-        self._last_evaluations: dict[int, list[float]] | None = None
+        self._last_evaluations: dict[int, np.ndarray] | None = None
 
     # ------------------------------------------------------------------
     # Step size
@@ -291,7 +294,9 @@ class ASHGF(BaseOptimizer):
         self._lipschitz = np.ones(dim)
         self._basis = special_ortho_group.rvs(dim)
         self._M = dim  # initially attribute all directions to "gradient subspace"
-        self._G = []
+        self._G_buffer = np.zeros((self.t, dim))
+        self._G_count = 0
+        self._G_idx = 0
         self._current_alpha = self.alpha_init
 
         self._last_derivatives = None
@@ -329,10 +334,11 @@ class ASHGF(BaseOptimizer):
         f_x = f(x)
 
         # ---- Determine the orthonormal basis ----
-        if len(self._G) >= self.t:
+        if self._G_count >= self.t:
             # Use gradient history to build directions
+            G_slice = self._G_buffer[: self._G_count]
             directions, M = compute_directions_ashgf(
-                dim, self._G, self._current_alpha, self._M
+                dim, G_slice, self._current_alpha, self._M
             )
             self._M = M
             basis: np.ndarray = orth(directions)
@@ -341,6 +347,9 @@ class ASHGF(BaseOptimizer):
             assert self._basis is not None, "_basis must be initialised in _setup"
             basis = self._basis  # shape (dim, dim)
             self._M = dim // 2
+
+        # Store basis for reuse in _post_iteration (avoids redundant SVD)
+        self._basis = basis
 
         # ---- Gauss-Hermite quadrature ----
         grad, evaluations, points, derivatives = gauss_hermite_derivative(
@@ -359,10 +368,10 @@ class ASHGF(BaseOptimizer):
         self._last_derivatives = derivatives
         self._last_evaluations = evaluations
 
-        # ---- Update gradient buffer ----
-        self._G.append(grad.copy())
-        if len(self._G) > self.t:
-            self._G = self._G[1:]
+        # ---- Update circular gradient buffer ----
+        self._G_buffer[self._G_idx] = grad
+        self._G_idx = (self._G_idx + 1) % self.t
+        self._G_count = min(self._G_count + 1, self.t)
 
         return grad
 
@@ -379,8 +388,13 @@ class ASHGF(BaseOptimizer):
     ) -> None:
         """Adapt ``sigma``, ``basis``, and ``alpha`` after each iteration.
 
-        This method reproduces the logic of the original ``subroutine``,
-        plus the corrected ``alpha`` update.
+        .. note::
+
+           After the warm-up phase the orthonormal basis is already
+           computed by ``grad_estimator`` (and stored in ``self._basis``),
+           so the expensive ``orth(directions)`` call is **not** repeated
+           here.  During warm-up a fresh random basis is still drawn for
+           the next iteration.
         """
         del f_val  # not used; adaptation uses stored derivatives/evaluations
 
@@ -390,7 +404,7 @@ class ASHGF(BaseOptimizer):
             return
 
         derivatives = self._last_derivatives
-        has_history = len(self._G) >= self.t
+        has_history = self._G_count >= self.t
 
         # --------------------------------------------------------------
         # 1. Alpha update (corrected — see module docstring)
@@ -416,43 +430,13 @@ class ASHGF(BaseOptimizer):
             return
 
         # --------------------------------------------------------------
-        # 3. Basis update
+        # 3. Basis update — only needed during warm-up.
+        #    After warm-up, grad_estimator already computed & stored
+        #    self._basis, so we skip the expensive recomputation here.
         # --------------------------------------------------------------
-        if has_history:
-            try:
-                directions, M = compute_directions_ashgf(
-                    dim, self._G, self._current_alpha, self._M
-                )
-            except Exception:
-                logger.warning(
-                    "iter=%d: direction sampling failed, using random basis",
-                    iteration,
-                )
-                directions = np.random.randn(dim, dim)
-                M = dim // 2
-            self._M = M
-            self._basis = orth(directions)
-        else:
+        if not has_history:
             self._M = dim // 2
             self._basis = special_ortho_group.rvs(dim)
-
-        # Ensure the basis has full rank (dim × dim)
-        assert self._basis is not None, "_basis must exist before basis expansion"
-        cur_basis: np.ndarray = self._basis
-        _max_attempts = 10
-        _attempt = 0
-        while cur_basis.shape != (dim, dim) and _attempt < _max_attempts:
-            missing = dim - cur_basis.shape[1]
-            v = np.random.randn(dim, missing)
-            cur_basis = orth(np.concatenate((cur_basis.T, v.T)))
-            _attempt += 1
-        if cur_basis.shape != (dim, dim):
-            logger.warning(
-                "iter=%d: basis expansion failed, falling back to random",
-                iteration,
-            )
-            cur_basis = special_ortho_group.rvs(dim)
-        self._basis = cur_basis
 
         # --------------------------------------------------------------
         # 4. Sigma and threshold adaptation
@@ -504,21 +488,15 @@ class ASHGF(BaseOptimizer):
         evaluations = self._last_evaluations
         M = max(self._M, 0)
 
-        # r: mean of minimum evaluations over the gradient-subspace directions
-        r_vals: list[float] = []
-        for j in range(M):
-            ev = evaluations.get(j)
-            if ev is not None and len(ev) > 0:
-                r_vals.append(min(ev))
-        r: float | None = float(np.mean(r_vals)) if r_vals else None
+        # Build evaluation matrix: (dim, m) and take min per direction
+        evals_matrix = np.array([evaluations[i] for i in range(dim)])
+        min_per_dir = np.min(evals_matrix, axis=1)  # (dim,)
 
-        # r_hat: same over the random directions (indices M .. dim-1)
-        r_hat_vals: list[float] = []
-        for j in range(M, dim):
-            ev = evaluations.get(j)
-            if ev is not None and len(ev) > 0:
-                r_hat_vals.append(min(ev))
-        r_hat: float | None = float(np.mean(r_hat_vals)) if r_hat_vals else None
+        # r: mean of minima over gradient-subspace directions (0:M)
+        r: float | None = float(np.mean(min_per_dir[:M])) if M > 0 else None
+
+        # r_hat: mean of minima over random directions (M:dim)
+        r_hat: float | None = float(np.mean(min_per_dir[M:])) if M < dim else None
 
         if r is None or r_hat is None:
             return

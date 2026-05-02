@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import logging
 import sys
 
@@ -13,6 +14,7 @@ from ashgf.benchmark import (
     benchmark_multi,
     plot_benchmark_comparison,
     plot_convergence_grid,
+    plot_per_function,
     plot_statistics,
     print_benchmark_multi_summary,
     print_benchmark_summary,
@@ -78,6 +80,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--sigma", type=float, default=1e-4, help="Smoothing bandwidth"
     )
     run_parser.add_argument(
+        "--patience",
+        type=int,
+        default=None,
+        help="Stop if no improvement for N iterations",
+    )
+    run_parser.add_argument(
+        "--ftol",
+        type=float,
+        default=None,
+        help="Tolerance on f(x) change for stagnation (requires --patience)",
+    )
+    run_parser.add_argument(
         "--quiet", action="store_true", help="Suppress progress output"
     )
 
@@ -98,6 +112,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compare_parser.add_argument("--iter", type=int, default=1000, dest="max_iter")
     compare_parser.add_argument("--seed", type=int, default=2003)
+    compare_parser.add_argument("--patience", type=int, default=None)
+    compare_parser.add_argument("--ftol", type=float, default=None)
     compare_parser.add_argument("--quiet", action="store_true")
 
     # ---- list command ----
@@ -162,6 +178,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         dest="plot_conv",
         help="Save convergence grid plot to this file path",
+    )
+    bench_parser.add_argument(
+        "--patience",
+        type=int,
+        default=None,
+        help="Stop if no improvement for N iterations",
+    )
+    bench_parser.add_argument(
+        "--ftol",
+        type=float,
+        default=None,
+        help="Tolerance on f(x) change for stagnation",
     )
     bench_parser.add_argument(
         "--quiet", action="store_true", help="Suppress per-run output"
@@ -256,7 +284,12 @@ def main(argv: list[str] | None = None) -> int:
             algo = algo_cls(**algo_kwargs)
 
             best_vals, all_vals = algo.optimize(
-                f, dim=args.dim, max_iter=args.max_iter, debug=not quiet
+                f,
+                dim=args.dim,
+                max_iter=args.max_iter,
+                debug=not quiet,
+                patience=args.patience,
+                ftol=args.ftol,
             )
             print(f"Best value: {best_vals[-1][1]:.6e}")
             print(f"Iterations: {len(all_vals)}")
@@ -269,7 +302,12 @@ def main(argv: list[str] | None = None) -> int:
                     algo_kwargs["sigma"] = args.sigma
                 algo = algo_cls(**algo_kwargs)
                 _, all_vals = algo.optimize(
-                    f, dim=args.dim, max_iter=args.max_iter, debug=False
+                    f,
+                    dim=args.dim,
+                    max_iter=args.max_iter,
+                    debug=False,
+                    patience=args.patience,
+                    ftol=args.ftol,
                 )
                 print(
                     f"{algo_name:>6}: final={all_vals[-1]:.6e}, "
@@ -284,6 +322,8 @@ def main(argv: list[str] | None = None) -> int:
             algos = [a.upper() for a in algos]
 
         # Determine whether single-dim or multi-dim
+        output_dir = args.output or "results"
+
         if args.dims is not None:
             # Multi-dimension benchmark
             dims = _parse_dims(args.dims)
@@ -294,11 +334,27 @@ def main(argv: list[str] | None = None) -> int:
                 seed=args.seed,
                 lr=args.lr,
                 sigma=args.sigma,
-                output_dir=args.output,
+                output_dir=output_dir,
                 debug=not quiet,
                 pattern=args.pattern,
+                patience=args.patience,
+                ftol=args.ftol,
             )
             print_benchmark_multi_summary(results)
+
+            # Auto-save comparison bar chart
+            bar_path = os.path.join(output_dir, "comparison_bars.png")
+            plot_benchmark_comparison(results, output_path=bar_path, show=False)
+
+            # Auto-save convergence grid (compact overview)
+            grid_path = os.path.join(output_dir, "convergence_grid.png")
+            plot_convergence_grid(
+                results, output_path=grid_path, show=False, max_functions=16
+            )
+
+            # Auto-save one PNG per function (detailed)
+            per_func_dir = os.path.join(output_dir, "per_function")
+            plot_per_function(results, output_dir=per_func_dir)
 
             if args.plot:
                 plot_benchmark_comparison(results, output_path=args.plot, show=False)
@@ -314,16 +370,26 @@ def main(argv: list[str] | None = None) -> int:
                 seed=args.seed,
                 lr=args.lr,
                 sigma=args.sigma,
-                output_dir=args.output,
+                output_dir=output_dir,
                 debug=not quiet,
                 pattern=args.pattern,
+                patience=args.patience,
+                ftol=args.ftol,
             )
             print_benchmark_summary(results)
 
-            # For single dim, plot_convergence_grid can't work well
-            # but plot_benchmark_comparison can with a wrapper
+            # Wrap for plotting functions
+            wrapped = {dim: results}
+
+            # Auto-save comparison bar chart
+            bar_path = os.path.join(output_dir, "comparison_bars.png")
+            plot_benchmark_comparison(wrapped, output_path=bar_path, show=False)
+
+            # Auto-save one PNG per function (detailed)
+            per_func_dir = os.path.join(output_dir, "per_function")
+            plot_per_function(wrapped, output_dir=per_func_dir)
+
             if args.plot:
-                wrapped = {dim: results}
                 plot_benchmark_comparison(wrapped, output_path=args.plot, show=False)
 
         return 0
@@ -344,6 +410,8 @@ def main(argv: list[str] | None = None) -> int:
             sigma=args.sigma,
             output_dir=args.output,
             debug=not quiet,
+            patience=args.patience,
+            ftol=args.ftol,
         )
         print_statistics_summary(st, args.function)
 

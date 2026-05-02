@@ -74,6 +74,7 @@ from typing import TYPE_CHECKING, Callable
 import numpy as np
 
 from ashgf.algorithms.base import BaseOptimizer
+from ashgf.gradient.estimators import _parallel_eval
 
 # ---------------------------------------------------------------------------
 # Optional dependency – scikit-learn is required for PCA-based active
@@ -266,14 +267,24 @@ class ASEBO(BaseOptimizer):
             A = np.random.randn(M, dim)
 
         # ==============================================================
-        # 4. Antithetic gradient estimation
+        # 4. Antithetic gradient estimation (pre-scaled directions)
         # ==============================================================
+        sigma_A = self.sigma * A  # (M, d) pre-scaled
+        points: list[np.ndarray] = []
+        for j in range(M):
+            d = sigma_A[j]
+            points.append(x + d)
+            points.append(x - d)
+
+        # Evaluate (parallel if ASHGF_N_JOBS > 1)
+        results = _parallel_eval(f, points)
+
+        # Assemble gradient
         grad = np.zeros(dim)
         for j in range(M):
-            d = A[j].reshape(x.shape)
-            f_plus = f(x + self.sigma * d)
-            f_minus = f(x - self.sigma * d)
-            grad += (f_plus - f_minus) * d.reshape(grad.shape)
+            f_plus = results[2 * j]
+            f_minus = results[2 * j + 1]
+            grad += (f_plus - f_minus) * A[j]
 
         # FIXED (Bug 1.5.2): divide by M – was missing in original,
         # resulting in a gradient scaled by M.

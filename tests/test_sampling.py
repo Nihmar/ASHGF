@@ -68,10 +68,22 @@ class TestComputeDirectionsASHGF:
     """Tests for compute_directions_ashgf."""
 
     def test_delegates_to_sges(self):
-        """Should behave like compute_directions_sges."""
+        """ASHGF direction sampling delegates to SGES internally."""
         dim = 10
         G = [np.random.randn(dim) for _ in range(20)]
+
+        # Set seed so both calls consume RNG identically
+        np.random.seed(42)
         dirs1, M1 = compute_directions_ashgf(dim, G, alpha=0.5, M=0)
-        dirs2, choices2 = compute_directions_sges(dim, G, alpha=0.5)
-        assert M1 == choices2
-        assert dirs1.shape == dirs2.shape
+
+        np.random.seed(42)
+        dirs2, M2 = compute_directions_sges(dim, G, alpha=0.5)
+
+        # When seeded identically, both paths produce the same output
+        assert M1 == M2
+        np.testing.assert_array_equal(dirs1, dirs2)
+        assert dirs1.shape == dirs2.shape == (dim, dim)
+
+        # Directions should be unit-norm
+        norms = np.linalg.norm(dirs1, axis=1)
+        np.testing.assert_allclose(norms, 1.0, rtol=1e-10)

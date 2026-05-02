@@ -256,29 +256,16 @@ class ASGF(BaseOptimizer):
         # -- Basis rotation ----------------------------------------------
         # The first basis vector is aligned with the current gradient;
         # the remaining directions are orthonormalised.
+        # NOTE: special_ortho_group.rvs always returns a (dim, dim)
+        # full-rank matrix, and scipy.linalg.orth preserves the rank of
+        # a full-rank input, so no rank-deficiency retry loop is needed.
         grad_norm = float(np.linalg.norm(grad))
         if grad_norm > 1e-12:
             new_basis = special_ortho_group.rvs(dim, random_state=self._rng)
             new_basis[0] = grad / grad_norm
-            new_basis = orth(new_basis)
+            self._basis = orth(new_basis)
         else:
-            new_basis = special_ortho_group.rvs(dim, random_state=self._rng)
-
-        # Ensure the basis has full rank (dim x dim)
-        _max_attempts = 10
-        _attempt = 0
-        while new_basis.shape != (dim, dim) and _attempt < _max_attempts:
-            missing = dim - new_basis.shape[1]
-            v = np.random.randn(dim, missing)
-            new_basis = orth(np.concatenate((new_basis.T, v.T)))
-            _attempt += 1
-        if new_basis.shape != (dim, dim):
-            logger.warning(
-                "iter=%d: basis expansion failed, falling back to random",
-                iteration,
-            )
-            new_basis = special_ortho_group.rvs(dim, random_state=self._rng)
-        self._basis = new_basis
+            self._basis = special_ortho_group.rvs(dim, random_state=self._rng)
 
         # -- Threshold-based sigma adaptation ----------------------------
         safe_lipschitz = np.maximum(self._lipschitz, 1e-12)

@@ -68,6 +68,8 @@ def benchmark(
     output_dir: str | None = None,
     debug: bool = False,
     pattern: str | None = None,
+    patience: int | None = None,
+    ftol: float | None = None,
 ) -> dict[str, dict[str, dict[str, Any]]]:
     """Run a full benchmark across functions and algorithms.
 
@@ -135,7 +137,8 @@ def benchmark(
                 # Re-instantiate with the same seed for reproducibility
                 algo_run = _make_algorithm(algo_name, seed=seed, lr=lr, sigma=sigma)
                 best_vals, all_vals = algo_run.optimize(
-                    f, dim=dim, max_iter=max_iter, debug=False
+                    f, dim=dim, max_iter=max_iter, debug=False,
+                    patience=patience, ftol=ftol,
                 )
                 elapsed = time.perf_counter() - t_start
 
@@ -224,6 +227,8 @@ def statistics(
     sigma: float = DEFAULT_SIGMA,
     output_dir: str | None = None,
     debug: bool = True,
+    patience: int | None = None,
+    ftol: float | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Run multiple independent trials and compute convergence statistics.
 
@@ -287,7 +292,8 @@ def statistics(
             try:
                 algo = _make_algorithm(algo_name, seed=run_seed, lr=lr, sigma=sigma)
                 _best_vals, all_vals = algo.optimize(
-                    f, dim=dim, max_iter=max_iter, debug=False
+                    f, dim=dim, max_iter=max_iter, debug=False,
+                    patience=patience, ftol=ftol,
                 )
                 all_sequences.append(all_vals)
                 best_finals.append(min(all_vals) if all_vals else float("nan"))
@@ -479,6 +485,8 @@ def benchmark_multi(
     output_dir: str | None = None,
     debug: bool = False,
     pattern: str | None = None,
+    patience: int | None = None,
+    ftol: float | None = None,
 ) -> dict[int, dict[str, dict[str, dict[str, Any]]]]:
     """Run benchmark across multiple dimensions.
 
@@ -503,6 +511,8 @@ def benchmark_multi(
             output_dir=(os.path.join(output_dir, f"dim_{dim}") if output_dir else None),
             debug=debug,
             pattern=pattern,
+            patience=patience,
+            ftol=ftol,
         )
 
     return all_results
@@ -562,7 +572,9 @@ def plot_benchmark_comparison(
     func_names: set[str] = set()
     for algo in algos:
         func_names.update(results[first_dim][algo].keys())
-    func_names_sorted = sorted(func_names) if top_n is None else sorted(func_names)[:top_n]
+    func_names_sorted = (
+        sorted(func_names) if top_n is None else sorted(func_names)[:top_n]
+    )
 
     n_funcs = len(func_names_sorted)
     n_algos = len(algos)
@@ -652,7 +664,7 @@ def plot_convergence_grid(
         all_funcs: set[str] = set()
         for algo in algos:
             all_funcs.update(results[dims[0]][algo].keys())
-        functions = sorted(all_funcs)[:9]
+        functions = sorted(all_funcs)
         # Exclude RL environments
         functions = [f for f in functions if not f.startswith("RL")]
 
@@ -703,3 +715,77 @@ def plot_convergence_grid(
         plt.show()
     else:
         plt.close(fig)
+
+def plot_per_function(
+    results,
+    output_dir='results',
+    functions=None,
+    show=False,
+):
+    import matplotlib.pyplot as plt
+    import os
+    import numpy as np
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.error('matplotlib is required for plotting.')
+        return []
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    dims = sorted(results.keys())
+    n_dims = len(dims)
+    algos = sorted(results[dims[0]].keys())
+    n_algos = len(algos)
+    cmap = plt.get_cmap('tab10')
+
+    if functions is None:
+        all_funcs = set()
+        for algo in algos:
+            all_funcs.update(results[dims[0]][algo].keys())
+        functions = sorted(all_funcs)
+        functions = [f for f in functions if not f.startswith('RL')]
+
+    saved_paths = []
+
+    for fn in functions:
+        fig, axes = plt.subplots(
+            n_dims, n_algos,
+            figsize=(4 * n_algos, 3 * n_dims),
+            squeeze=False,
+        )
+
+        for row, dim in enumerate(dims):
+            for col, algo in enumerate(algos):
+                ax = axes[row, col]
+                color = cmap(col / max(1, n_algos - 1)) if n_algos > 1 else cmap(0.0)
+                entry = results[dim][algo].get(fn, {})
+                vals = entry.get('values', [])
+                if vals:
+                    ax.plot(vals, color=color, linewidth=0.8)
+                    best_idx = int(np.argmin(vals))
+                    ax.axvline(x=best_idx, color=color, linestyle=':', alpha=0.5)
+                ax.set_yscale('log')
+                ax.grid(True, alpha=0.2)
+                if row == 0:
+                    ax.set_title(algo, fontsize=10, fontweight='bold')
+                if col == 0:
+                    ax.set_ylabel(f'dim={dim}')
+                if row == n_dims - 1:
+                    ax.set_xlabel('Iteration')
+
+        fig.suptitle(f'{fn}  -  Convergence per algorithm and dimension', fontsize=12, fontweight='bold')
+        plt.tight_layout()
+
+        fname = f'{fn}.png'
+        path = os.path.join(output_dir, fname)
+        fig.savefig(path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+        saved_paths.append(path)
+        logger.info('Saved %s', path)
+
+    return saved_paths
