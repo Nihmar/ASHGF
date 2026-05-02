@@ -71,7 +71,7 @@ class TestComputeDirectionsASHGF:
         """Should behave like compute_directions_sges."""
         dim = 10
         G = [np.random.randn(dim) for _ in range(20)]
-        dirs1, M1 = compute_directions_ashgf(dim, G, alpha=0.5)
+        dirs1, M1 = compute_directions_ashgf(dim, G, alpha=0.5, M=0)
         dirs2, choices2 = compute_directions_sges(dim, G, alpha=0.5)
         assert M1 == choices2
         assert dirs1.shape == dirs2.shape

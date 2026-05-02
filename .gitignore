@@ -208,3 +208,6 @@ __marimo__/
 
 /thesis/figures/
 /thesis/conversione_in_pdfa/
+/results
+comparison_bars.png
+convergence_grid.png

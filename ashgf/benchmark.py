@@ -107,6 +107,8 @@ def benchmark(
     """
     if functions is None:
         functions = list_functions()
+        # Exclude RL environments by default (require gymnasium, slow)
+        functions = [f for f in functions if not f.startswith("RL")]
     if pattern is not None:
         pat = pattern.lower()
         functions = [f for f in functions if pat in f.lower()]
@@ -457,6 +459,8 @@ def plot_statistics(
         plt.show()
     else:
         plt.close(fig)
+
+
 # Appended to benchmark.py
 
 # ---------------------------------------------------------------------------
@@ -524,7 +528,7 @@ def plot_benchmark_comparison(
     results: dict[int, dict[str, dict[str, dict[str, Any]]]],
     output_path: str | None = None,
     show: bool = False,
-    top_n: int = 20,
+    top_n: int | None = None,
 ) -> None:
     """Generate multi-panel comparison plots from benchmark results.
 
@@ -540,8 +544,8 @@ def plot_benchmark_comparison(
         Save figure to this path.
     show : bool
         Display interactively.
-    top_n : int
-        Show only the first ``top_n`` functions (sorted alphabetically).
+    top_n : int or None
+        Show only the first ``top_n`` functions (None = all).
     """
     try:
         import matplotlib.pyplot as plt
@@ -558,7 +562,7 @@ def plot_benchmark_comparison(
     func_names: set[str] = set()
     for algo in algos:
         func_names.update(results[first_dim][algo].keys())
-    func_names_sorted = sorted(func_names)[:top_n]
+    func_names_sorted = sorted(func_names) if top_n is None else sorted(func_names)[:top_n]
 
     n_funcs = len(func_names_sorted)
     n_algos = len(algos)
@@ -649,6 +653,8 @@ def plot_convergence_grid(
         for algo in algos:
             all_funcs.update(results[dims[0]][algo].keys())
         functions = sorted(all_funcs)[:9]
+        # Exclude RL environments
+        functions = [f for f in functions if not f.startswith("RL")]
 
     n_funcs = len(functions)
     n_algos = len(algos)
@@ -680,6 +686,7 @@ def plot_convergence_grid(
 
     # Single legend at the bottom
     from matplotlib.lines import Line2D
+
     handles = [
         Line2D([0], [0], color=cmap(i / max(1, n_algos - 1)), label=algo)
         for i, algo in enumerate(algos)

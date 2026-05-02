@@ -18,7 +18,7 @@ class BaseOptimizer(ABC):
     """Abstract base class for derivative-free optimizers.
 
     Implements the Template Method pattern: subclasses provide
-    `grad_estimator` and optionally override `_post_iteration`.
+    ``grad_estimator`` and optionally override ``_post_iteration``.
 
     Parameters
     ----------
@@ -121,13 +121,33 @@ class BaseOptimizer(ABC):
                 # 1. Estimate gradient
                 grad = self.grad_estimator(x, f)
 
+                # Guard against NaN/inf in gradient
+                if not np.all(np.isfinite(grad)):
+                    logger.warning(
+                        "iter=%d: gradient contains NaN/inf — terminating", i
+                    )
+                    break
+
                 # 2. Update x
+                step_size = self._get_step_size()
                 if maximize:
-                    x = x + self._get_step_size() * grad
+                    x = x + step_size * grad
                 else:
-                    x = x - self._get_step_size() * grad
+                    x = x - step_size * grad
+
+                # Guard against NaN/inf in x
+                if not np.all(np.isfinite(x)):
+                    logger.warning("iter=%d: x contains NaN/inf — terminating", i)
+                    break
 
                 current_val = f(x)
+
+                # Guard against NaN/inf in function value
+                if not np.isfinite(current_val):
+                    logger.warning("iter=%d: f(x) = %s — terminating", i, current_val)
+                    steps[i] = (x.copy(), current_val)
+                    break
+
                 steps[i] = (x.copy(), current_val)
 
                 # 3. Track best
@@ -150,9 +170,10 @@ class BaseOptimizer(ABC):
                 break
 
         if debug:
+            last_val = steps[actual_iter][1]
             logger.info(
                 "final  f(x)=%.6e  iter=%d  best=%.6e",
-                steps[actual_iter][1],
+                last_val,
                 actual_iter,
                 best_value,
             )

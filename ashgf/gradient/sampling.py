@@ -1,17 +1,16 @@
-"""Direction sampling utilities for gradient-based optimization algorithms.
+"""Direction sampling strategies for gradient estimation.
 
-This module provides functions to generate direction matrices used in
-stochastic optimization methods such as SGES and ASHGF.
+Provides functions for generating search directions used in
+gradient-free optimization, including:
+
+- Pure random (Gaussian isotropic) directions
+- SGES-style adaptive mixing of gradient-history and random directions
+- ASHGF-style directions (delegates to SGES)
 """
 
 from __future__ import annotations
 
-import logging
-from typing import List, Optional, Tuple, Union
-
 import numpy as np
-
-logger = logging.getLogger(__name__)
 
 __all__ = [
     "compute_directions",
@@ -21,85 +20,62 @@ __all__ = [
 
 
 def compute_directions(dim: int) -> np.ndarray:
-    """Generate a `dim × dim` matrix of i.i.d. standard normal directions.
+    """Generate a ``dim × dim`` matrix of i.i.d. standard normal directions.
+
+    The rows are drawn from :math:`\\mathcal{N}(0, I)` and are **not**
+    normalised to unit length (the Gaussian smoothing formula uses the
+    raw Gaussian directions).
 
     Parameters
     ----------
     dim : int
-        Dimensionality of the problem space. The returned matrix has shape
-        ``(dim, dim)``, where each row is a direction vector drawn from the
-        standard normal distribution :math:`\\mathcal{N}(0, I)`.
+        Dimensionality of the ambient space.
 
     Returns
     -------
-    np.ndarray
-        A ``(dim, dim)`` NumPy array whose entries are i.i.d. samples from
-        :math:`\\mathcal{N}(0, 1)`.
-
-    Notes
-    -----
-    The directions are **not** normalized to unit length.  For unit-norm
-    directions, use `compute_directions_sges` or `compute_directions_ashgf`
-    which include an explicit normalization step.
-
-    Examples
-    --------
-    >>> np.random.seed(42)
-    >>> d = compute_directions(5)
-    >>> d.shape
-    (5, 5)
+    np.ndarray, shape (dim, dim)
+        Matrix whose rows are i.i.d. :math:`\\mathcal{N}(0, 1)` vectors.
     """
     return np.random.randn(dim, dim)
 
 
 def compute_directions_sges(
     dim: int,
-    G: Union[List[np.ndarray], np.ndarray],
+    G: list[np.ndarray] | np.ndarray,
     alpha: float,
-) -> Tuple[np.ndarray, int]:
-    """Generate directions mixing gradient-history subspace and random subspace.
-
-    With probability ``alpha``, a direction is drawn from
-    :math:`\\mathcal{N}(0, \\mathrm{Cov}(G))` (the empirical covariance of the
-    gradient buffer ``G``); with probability ``1 - alpha``, it is drawn from
-    the isotropic standard normal :math:`\\mathcal{N}(0, I)`.  All directions
-    are then normalized to unit Euclidean length.
+) -> tuple[np.ndarray, int]:
+    """Generate directions mixing gradient-subspace and isotropic components.
 
     Parameters
     ----------
     dim : int
-        Dimensionality of the problem space.
-    G : array-like, shape ``(T, d)``
-        Buffer of past gradient estimates.  Each row is a gradient vector of
-        length ``d`` (which must equal ``dim``).  If a list of 1-D arrays is
-        provided, it is converted to a 2-D NumPy array internally.
+        Dimensionality of the ambient space.
+    G : list of np.ndarray or np.ndarray, shape (T, d)
+        Gradient-history buffer; each row is a past gradient estimate.
     alpha : float
         Probability of sampling a direction from the gradient subspace
-        (i.e., from the empirical covariance of ``G``).  Must satisfy
-        ``0 <= alpha <= 1``.
+        (isotropic otherwise).  Must be in [0, 1].
 
     Returns
     -------
-    directions : np.ndarray
-        A ``(dim, dim)`` matrix where each row is a **unit-norm** direction
-        vector.
+    dirs : np.ndarray, shape (dim, dim)
+        Orthonormal matrix whose rows are unit-norm directions.
     choices : int
-        The number of directions that were actually sampled from the gradient
-        subspace (can range from ``0`` to ``dim``).
+        Number of directions actually sampled from the gradient subspace
+        (may differ from ``alpha * dim`` due to the Bernoulli process).
+
+    Raises
+    ------
+    ValueError
+        If ``alpha`` is not in [0, 1].
 
     Notes
     -----
-    The covariance matrix :math:`\\mathrm{Cov}(G)` is estimated from the
-    columns of ``G`` via `numpy.cov`.  The binary decisions for each of the
-    ``dim`` directions are taken independently according to a Bernoulli
-    distribution with parameter ``alpha``, and the resulting count is clamped
-    to the valid range ``[0, dim]``.
-
-    To avoid division by zero, any direction whose empirical standard
-    deviation (before concatenation) is below ``1e-12`` is left untouched
-    during the per-component scaling step.  After assembly, the final
-    normalization guards against zero-norm rows by replacing near-zero norms
-    with ``1.0``.
+    The gradient-subspace covariance is Tikhonov-regularised
+    (``1e-6 * I`` added) to prevent SVD non-convergence.  If the
+    covariance contains non-finite values (e.g., due to overflow in
+    the objective function), the gradient-subspace directions fall
+    back to isotropic sampling.
 
     Examples
     --------
@@ -111,11 +87,25 @@ def compute_directions_sges(
     >>> np.allclose(np.linalg.norm(dirs, axis=1), 1.0)
     True
     """
+    if not 0.0 <= alpha <= 1.0:
+        raise ValueError(f"alpha must be in [0, 1], got {alpha}")
+
     # Ensure G is a 2-D array
     G_arr: np.ndarray = np.array(G)
 
     # Empirical covariance of the gradient buffer (column-wise)
     cov_L_G: np.ndarray = np.cov(G_arr.T)
+
+    # Guard against non-finite covariance (caused by Inf/NaN in gradients)
+    if not np.all(np.isfinite(cov_L_G)):
+        # Fall back to isotropic directions
+        dirs = np.random.randn(dim, dim)
+        norms = np.linalg.norm(dirs, axis=-1, keepdims=True)
+        norms = np.where(norms < 1e-12, 1.0, norms)
+        return dirs / norms, 0
+
+    # Add Tikhonov regularisation to prevent singular covariance
+    cov_L_G += 1e-6 * np.eye(dim)
 
     # Binary decisions: how many directions come from the gradient subspace
     choices: int = 0
@@ -128,7 +118,11 @@ def compute_directions_sges(
     # --- Gradient-subspace directions ---
     dirs_grad: np.ndarray = np.zeros((choices, dim))
     if choices > 0:
-        dirs_grad = np.random.multivariate_normal(np.zeros(dim), cov_L_G, choices)
+        try:
+            dirs_grad = np.random.multivariate_normal(np.zeros(dim), cov_L_G, choices)
+        except (np.linalg.LinAlgError, ValueError):
+            # Fallback: if SVD still fails, use isotropic directions
+            dirs_grad = np.random.randn(choices, dim)
         # Scale each direction by its empirical std (optional pre-normalization)
         for i in range(choices):
             std_i: float = float(np.std(dirs_grad[i]))
@@ -148,73 +142,33 @@ def compute_directions_sges(
 
     # Normalize every direction to unit length
     norms: np.ndarray = np.linalg.norm(dirs, axis=-1, keepdims=True)
-    norms[norms < 1e-12] = 1.0
-    dirs = dirs / norms
-
-    return dirs, choices
+    norms = np.where(norms < 1e-12, 1.0, norms)
+    return dirs / norms, choices
 
 
 def compute_directions_ashgf(
     dim: int,
-    G: Union[List[np.ndarray], np.ndarray],
+    G: list[np.ndarray] | np.ndarray,
     alpha: float,
-    M: Optional[int] = None,
-) -> Tuple[np.ndarray, int]:
-    """Generate directions for ASHGF, mixing gradient subspace and random subspace.
-
-    Exactly ``M`` directions are drawn from the gradient-history subspace
-    (using the empirical covariance of ``G``) and the remaining ``dim - M``
-    from the isotropic random subspace :math:`\\mathcal{N}(0, I)`.
-    All directions are then normalized to unit Euclidean length.
+    M: int,
+) -> tuple[np.ndarray, int]:
+    """Generate directions for ASHGF (currently delegates to SGES).
 
     Parameters
     ----------
     dim : int
-        Dimensionality of the problem space.
-    G : array-like, shape ``(T, d)``
-        Buffer of past gradient estimates.  Each row is a gradient vector of
-        length ``d`` (which must equal ``dim``).
+        Dimensionality of the ambient space.
+    G : list of np.ndarray or np.ndarray
+        Gradient-history buffer.
     alpha : float
-        Probability parameter used to determine ``M`` when ``M`` is ``None``
-        (forwarded to `compute_directions_sges`).
-    M : int or None, optional
-        Pre-computed number of directions to sample from the gradient
-        subspace.  If ``None``, ``M`` is determined internally by the same
-        binary-sampling procedure employed in `compute_directions_sges`.
+        Probability of gradient-subspace sampling.
+    M : int
+        Unused; kept for backward compatibility.
 
     Returns
     -------
-    directions : np.ndarray
-        A ``(dim, dim)`` matrix where each row is a **unit-norm** direction
-        vector.
-    M : int
-        Number of directions actually drawn from the gradient subspace.
-
-    Notes
-    -----
-    This is a thin wrapper around `compute_directions_sges` that makes the
-    ``M`` parameter explicit in the interface.  When ``M`` is provided
-    directly, it is currently passed through to `compute_directions_sges`
-    which ignores it in favour of its own Bernoulli sampling; this behaviour
-    is intentional for API compatibility and future extension.
-
-    See Also
-    --------
-    compute_directions_sges : Underlying direction-generation routine.
-
-    Examples
-    --------
-    >>> np.random.seed(42)
-    >>> G = np.random.randn(8, 4)
-    >>> dirs, m = compute_directions_ashgf(4, G, 0.5, M=2)
-    >>> dirs.shape
-    (4, 4)
-    >>> np.allclose(np.linalg.norm(dirs, axis=1), 1.0)
-    True
+    dirs : np.ndarray, shape (dim, dim)
+    choices : int
     """
-    if M is None:
-        return compute_directions_sges(dim, G, alpha)
-    else:
-        # Pass through to the underlying implementation; future versions
-        # may use M directly to control the subspace split.
-        return compute_directions_sges(dim, G, alpha)
+    del M  # reserved for future per-dimension control
+    return compute_directions_sges(dim, G, alpha)

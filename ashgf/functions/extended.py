@@ -382,9 +382,10 @@ def extended_cliff(x: np.ndarray) -> float:
 
     term_1 = ((x_p - 3.0) / 100.0) ** 2
     term_2 = x_p - x_d
-    term_3 = np.exp(20.0 * (x_p - x_d))
+    # Clip the exponent to prevent overflow in exp(20 * diff)
+    cliff_exp = np.exp(np.clip(20.0 * (x_p - x_d), -100.0, 100.0))
 
-    return float(np.sum(term_1 + term_2 + term_3))
+    return float(np.sum(term_1 + term_2 + cliff_exp))
 
 
 # ---------------------------------------------------------------------------

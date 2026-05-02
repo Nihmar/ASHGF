@@ -419,9 +419,17 @@ class ASHGF(BaseOptimizer):
         # 3. Basis update
         # --------------------------------------------------------------
         if has_history:
-            directions, M = compute_directions_ashgf(
-                dim, self._G, self._current_alpha, self._M
-            )
+            try:
+                directions, M = compute_directions_ashgf(
+                    dim, self._G, self._current_alpha, self._M
+                )
+            except Exception:
+                logger.warning(
+                    "iter=%d: direction sampling failed, using random basis",
+                    iteration,
+                )
+                directions = np.random.randn(dim, dim)
+                M = dim // 2
             self._M = M
             self._basis = orth(directions)
         else:
@@ -431,10 +439,19 @@ class ASHGF(BaseOptimizer):
         # Ensure the basis has full rank (dim × dim)
         assert self._basis is not None, "_basis must exist before basis expansion"
         cur_basis: np.ndarray = self._basis
-        while cur_basis.shape != (dim, dim):
+        _max_attempts = 10
+        _attempt = 0
+        while cur_basis.shape != (dim, dim) and _attempt < _max_attempts:
             missing = dim - cur_basis.shape[1]
             v = np.random.randn(dim, missing)
             cur_basis = orth(np.concatenate((cur_basis.T, v.T)))
+            _attempt += 1
+        if cur_basis.shape != (dim, dim):
+            logger.warning(
+                "iter=%d: basis expansion failed, falling back to random",
+                iteration,
+            )
+            cur_basis = special_ortho_group.rvs(dim)
         self._basis = cur_basis
 
         # --------------------------------------------------------------

@@ -402,7 +402,11 @@ def bdqrtic(x: np.ndarray) -> float:
     term_1 = (-4.0 * x[:-3] + 3.0) ** 2
     x_sq = x**2
     term_2 = (
-        x_sq[:-3] + 2.0 * x_sq[1:-2] + 3.0 * x_sq[2:-1] + 4.0 * x_sq[3:] + 5.0 * x_sq[-1]
+        x_sq[:-3]
+        + 2.0 * x_sq[1:-2]
+        + 3.0 * x_sq[2:-1]
+        + 4.0 * x_sq[3:]
+        + 5.0 * x_sq[-1]
     ) ** 2
     return float(np.sum(term_1 + term_2))
 
@@ -788,7 +792,9 @@ def bdexp(x: np.ndarray) -> float:
         Function value.
     """
     term_1 = x[:-2] + x[1:-1]
-    term_2 = np.exp(-x[2:] * term_1)
+    # Clip exponent to prevent overflow in exp()
+    exponent = np.clip(-x[2:] * term_1, -100.0, 100.0)
+    term_2 = np.exp(exponent)
     return float(np.sum(term_1 * term_2))
 
 
