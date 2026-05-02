@@ -26,6 +26,18 @@ from ashgf.utils.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_plot(plot_fn, *args, **kwargs):
+    """Call *plot_fn* swallowing any exception so plotting never crashes the run."""
+    try:
+        return plot_fn(*args, **kwargs)
+    except Exception:
+        logger.exception(
+            "Plot call %s failed – continuing", getattr(plot_fn, "__name__", plot_fn)
+        )
+        return None
+
+
 ALGORITHMS = {
     "gd": GD,
     "sges": SGES,
@@ -353,15 +365,22 @@ def main(argv: list[str] | None = None) -> int:
 
                 # Per-dimension per-function plots
                 per_func_dir = os.path.join(dim_dir, "per_function")
-                saved = plot_per_function(wrapped, output_dir=per_func_dir)
+                saved = (
+                    _safe_plot(plot_per_function, wrapped, output_dir=per_func_dir)
+                    or []
+                )
 
                 # Per-dimension comparison bars
                 bar_path = os.path.join(dim_dir, "comparison_bars.png")
-                plot_benchmark_comparison(wrapped, output_path=bar_path, show=False)
+                _safe_plot(
+                    plot_benchmark_comparison, wrapped, output_path=bar_path, show=False
+                )
 
                 # Per-dimension convergence grid
                 grid_path = os.path.join(dim_dir, "convergence_grid.png")
-                plot_convergence_grid(wrapped, output_path=grid_path, show=False)
+                _safe_plot(
+                    plot_convergence_grid, wrapped, output_path=grid_path, show=False
+                )
 
                 print(f"  -> {len(saved)} plots + bars + grid saved in {dim_dir}/\n")
 
@@ -370,17 +389,31 @@ def main(argv: list[str] | None = None) -> int:
 
             # Cross-dimension plots (only after all dims complete)
             bar_path = os.path.join(output_dir, "comparison_bars.png")
-            plot_benchmark_comparison(all_results, output_path=bar_path, show=False)
+            _safe_plot(
+                plot_benchmark_comparison, all_results, output_path=bar_path, show=False
+            )
 
             grid_path = os.path.join(output_dir, "convergence_grid.png")
-            plot_convergence_grid(all_results, output_path=grid_path, show=False)
+            _safe_plot(
+                plot_convergence_grid, all_results, output_path=grid_path, show=False
+            )
 
             print(f"\nCross-dimension plots saved in {output_dir}/")
 
             if args.plot:
-                plot_benchmark_comparison(all_results, output_path=args.plot, show=False)
+                _safe_plot(
+                    plot_benchmark_comparison,
+                    all_results,
+                    output_path=args.plot,
+                    show=False,
+                )
             if args.plot_conv:
-                plot_convergence_grid(all_results, output_path=args.plot_conv, show=False)
+                _safe_plot(
+                    plot_convergence_grid,
+                    all_results,
+                    output_path=args.plot_conv,
+                    show=False,
+                )
         else:
             # Single-dimension benchmark
             dim = args.dim if args.dim is not None else 100
@@ -404,15 +437,24 @@ def main(argv: list[str] | None = None) -> int:
 
             # Auto-save comparison bar chart
             bar_path = os.path.join(output_dir, "comparison_bars.png")
-            plot_benchmark_comparison(wrapped, output_path=bar_path, show=False)
+            _safe_plot(
+                plot_benchmark_comparison, wrapped, output_path=bar_path, show=False
+            )
 
             # Auto-save one PNG PER FUNCTION (detailed convergence: dims x algos)
             per_func_dir = os.path.join(output_dir, "per_function")
-            saved = plot_per_function(wrapped, output_dir=per_func_dir)
+            saved = (
+                _safe_plot(plot_per_function, wrapped, output_dir=per_func_dir) or []
+            )
             print(f"\nGenerated {len(saved)} per-function plots in {per_func_dir}/")
 
             if args.plot:
-                plot_benchmark_comparison(wrapped, output_path=args.plot, show=False)
+                _safe_plot(
+                    plot_benchmark_comparison,
+                    wrapped,
+                    output_path=args.plot,
+                    show=False,
+                )
 
         return 0
 
@@ -438,7 +480,9 @@ def main(argv: list[str] | None = None) -> int:
         print_statistics_summary(st, args.function)
 
         if args.plot:
-            plot_statistics(st, args.function, output_path=args.plot, show=False)
+            _safe_plot(
+                plot_statistics, st, args.function, output_path=args.plot, show=False
+            )
 
         return 0
 

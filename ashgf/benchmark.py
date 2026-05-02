@@ -22,6 +22,25 @@ from ashgf.functions import get_function, list_functions
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Helper – sanitize sequences for log-scale plotting
+# ---------------------------------------------------------------------------
+
+
+def _sanitize_for_log(values, default: float = 1e-30):
+    """Return a copy of *values* safe for log-scale axes.
+
+    Replaces ``inf``, ``-inf``, ``NaN``, zero, and negative values
+    with *default* (a tiny positive number) so that matplotlib log
+    tickers don't choke.
+    """
+    arr = np.asarray(values, dtype=float)
+    mask = ~np.isfinite(arr) | (arr <= 0.0)
+    out = arr.copy()
+    out[mask] = default
+    return out.tolist()
+
+
+# ---------------------------------------------------------------------------
 # Registry of available algorithms
 # ---------------------------------------------------------------------------
 
@@ -137,8 +156,12 @@ def benchmark(
                 # Re-instantiate with the same seed for reproducibility
                 algo_run = _make_algorithm(algo_name, seed=seed, lr=lr, sigma=sigma)
                 best_vals, all_vals = algo_run.optimize(
-                    f, dim=dim, max_iter=max_iter, debug=False,
-                    patience=patience, ftol=ftol,
+                    f,
+                    dim=dim,
+                    max_iter=max_iter,
+                    debug=False,
+                    patience=patience,
+                    ftol=ftol,
                 )
                 elapsed = time.perf_counter() - t_start
 
@@ -292,8 +315,12 @@ def statistics(
             try:
                 algo = _make_algorithm(algo_name, seed=run_seed, lr=lr, sigma=sigma)
                 _best_vals, all_vals = algo.optimize(
-                    f, dim=dim, max_iter=max_iter, debug=False,
-                    patience=patience, ftol=ftol,
+                    f,
+                    dim=dim,
+                    max_iter=max_iter,
+                    debug=False,
+                    patience=patience,
+                    ftol=ftol,
                 )
                 all_sequences.append(all_vals)
                 best_finals.append(min(all_vals) if all_vals else float("nan"))
@@ -420,21 +447,30 @@ def plot_statistics(
         iters = np.arange(len(s["mean"]))
 
         # Plot mean
-        ax1.plot(iters, s["mean"], label=algo_name, color=color)
+        mean_clean = _sanitize_for_log(s["mean"])
+        ax1.plot(iters, mean_clean, label=algo_name, color=color)
         if len(s["std"]) > 0:
+            low = np.maximum(np.asarray(s["mean"]) - np.asarray(s["std"]), 1e-16)
+            high = np.asarray(s["mean"]) + np.asarray(s["std"])
             ax1.fill_between(
                 iters,
-                np.maximum(s["mean"] - s["std"], 1e-16),
-                s["mean"] + s["std"],
+                _sanitize_for_log(low),
+                _sanitize_for_log(high),
                 alpha=0.2,
                 color=color,
             )
 
         # Plot min / max envelope
-        ax2.plot(iters, s["min"], label=f"{algo_name} min", color=color, alpha=0.6)
         ax2.plot(
             iters,
-            s["max"],
+            _sanitize_for_log(s["min"]),
+            label=f"{algo_name} min",
+            color=color,
+            alpha=0.6,
+        )
+        ax2.plot(
+            iters,
+            _sanitize_for_log(s["max"]),
             label=f"{algo_name} max",
             color=color,
             alpha=0.6,
@@ -455,14 +491,25 @@ def plot_statistics(
     ax2.legend(fontsize=8)
     ax2.grid(True, alpha=0.3)
 
-    plt.tight_layout()
+    try:
+        plt.tight_layout()
+    except Exception:
+        logger.warning(
+            "tight_layout failed for statistics plot – skipping layout adjustment"
+        )
 
     if output_path:
-        fig.savefig(output_path, dpi=300, bbox_inches="tight")
-        logger.info("Plot saved to %s", output_path)
+        try:
+            fig.savefig(output_path, dpi=300, bbox_inches="tight")
+            logger.info("Plot saved to %s", output_path)
+        except Exception:
+            logger.exception("Failed to save statistics plot to %s", output_path)
 
     if show:
-        plt.show()
+        try:
+            plt.show()
+        except Exception:
+            logger.exception("plt.show() failed")
     else:
         plt.close(fig)
 
@@ -599,7 +646,9 @@ def plot_benchmark_comparison(
                 entry = results[dim][algo].get(fn, {})
                 best = entry.get("best", float("nan"))
                 values.append(best if np.isfinite(best) else np.nan)
-            ax.bar(x + i * width, values, width, label=algo, color=color)
+            # sanitize for log scale (nan -> small positive)
+            clean_vals = _sanitize_for_log(values)
+            ax.bar(x + i * width, clean_vals, width, label=algo, color=color)
 
         ax.set_yscale("log")
         ax.set_xticks(x + width * (n_algos - 1) / 2)
@@ -615,14 +664,26 @@ def plot_benchmark_comparison(
         fontsize=14,
         fontweight="bold",
     )
-    plt.tight_layout()
+
+    try:
+        plt.tight_layout()
+    except Exception:
+        logger.warning(
+            "tight_layout failed for comparison plot – skipping layout adjustment"
+        )
 
     if output_path:
-        fig.savefig(output_path, dpi=300, bbox_inches="tight")
-        logger.info("Comparison plot saved to %s", output_path)
+        try:
+            fig.savefig(output_path, dpi=300, bbox_inches="tight")
+            logger.info("Comparison plot saved to %s", output_path)
+        except Exception:
+            logger.exception("Failed to save comparison plot to %s", output_path)
 
     if show:
-        plt.show()
+        try:
+            plt.show()
+        except Exception:
+            logger.exception("plt.show() failed")
     else:
         plt.close(fig)
 
@@ -687,7 +748,10 @@ def plot_convergence_grid(
                 entry = results[dim][algo].get(fn, {})
                 vals = entry.get("values", [])
                 if vals:
-                    ax.plot(vals, label=algo, color=color, linewidth=0.8)
+                    clean = _sanitize_for_log(vals)
+                    ax.plot(clean, label=algo, color=color, linewidth=0.8)
+                else:
+                    ax.plot([1e-30, 1e-30], label=algo, color=color, linewidth=0.8)
             ax.set_yscale("log")
             ax.set_xlabel("Iteration")
             if col == 0:
@@ -705,34 +769,48 @@ def plot_convergence_grid(
     ]
     fig.legend(handles, algos, loc="lower center", ncol=n_algos, fontsize=8)
     fig.suptitle("Convergence curves", fontsize=14, fontweight="bold")
-    plt.tight_layout(rect=(0, 0.04, 1, 0.97))
+
+    try:
+        plt.tight_layout(rect=(0, 0.04, 1, 0.97))
+    except Exception:
+        logger.warning(
+            "tight_layout failed for convergence grid – skipping layout adjustment"
+        )
 
     if output_path:
-        fig.savefig(output_path, dpi=300, bbox_inches="tight")
-        logger.info("Convergence grid saved to %s", output_path)
+        try:
+            fig.savefig(output_path, dpi=300, bbox_inches="tight")
+            logger.info("Convergence grid saved to %s", output_path)
+        except Exception:
+            logger.exception("Failed to save convergence grid to %s", output_path)
 
     if show:
-        plt.show()
+        try:
+            plt.show()
+        except Exception:
+            logger.exception("plt.show() failed")
     else:
         plt.close(fig)
 
+
 def plot_per_function(
     results,
-    output_dir='results',
+    output_dir="results",
     functions=None,
     show=False,
 ):
-    import matplotlib.pyplot as plt
-    import os
-    import numpy as np
     import logging
+    import os
+
+    import matplotlib.pyplot as plt
+    import numpy as np
 
     logger = logging.getLogger(__name__)
 
     try:
         import matplotlib.pyplot as plt
     except ImportError:
-        logger.error('matplotlib is required for plotting.')
+        logger.error("matplotlib is required for plotting.")
         return []
 
     os.makedirs(output_dir, exist_ok=True)
@@ -741,20 +819,21 @@ def plot_per_function(
     n_dims = len(dims)
     algos = sorted(results[dims[0]].keys())
     n_algos = len(algos)
-    cmap = plt.get_cmap('tab10')
+    cmap = plt.get_cmap("tab10")
 
     if functions is None:
         all_funcs = set()
         for algo in algos:
             all_funcs.update(results[dims[0]][algo].keys())
         functions = sorted(all_funcs)
-        functions = [f for f in functions if not f.startswith('RL')]
+        functions = [f for f in functions if not f.startswith("RL")]
 
     saved_paths = []
 
     for fn in functions:
         fig, axes = plt.subplots(
-            n_dims, n_algos,
+            n_dims,
+            n_algos,
             figsize=(4 * n_algos, 3 * n_dims),
             squeeze=False,
         )
@@ -764,28 +843,46 @@ def plot_per_function(
                 ax = axes[row, col]
                 color = cmap(col / max(1, n_algos - 1)) if n_algos > 1 else cmap(0.0)
                 entry = results[dim][algo].get(fn, {})
-                vals = entry.get('values', [])
+                vals = entry.get("values", [])
                 if vals:
-                    ax.plot(vals, color=color, linewidth=0.8)
-                    best_idx = int(np.argmin(vals))
-                    ax.axvline(x=best_idx, color=color, linestyle=':', alpha=0.5)
-                ax.set_yscale('log')
+                    clean = _sanitize_for_log(vals)
+                    ax.plot(clean, color=color, linewidth=0.8)
+                    best_idx = int(np.argmin(clean))
+                    ax.axvline(x=best_idx, color=color, linestyle=":", alpha=0.5)
+                else:
+                    # still need a non-empty safe range so log scale doesn't break
+                    ax.plot([1e-30, 1e-30], color=color, linewidth=0.8)
+                ax.set_yscale("log")
                 ax.grid(True, alpha=0.2)
                 if row == 0:
-                    ax.set_title(algo, fontsize=10, fontweight='bold')
+                    ax.set_title(algo, fontsize=10, fontweight="bold")
                 if col == 0:
-                    ax.set_ylabel(f'dim={dim}')
+                    ax.set_ylabel(f"dim={dim}")
                 if row == n_dims - 1:
-                    ax.set_xlabel('Iteration')
+                    ax.set_xlabel("Iteration")
 
-        fig.suptitle(f'{fn}  -  Convergence per algorithm and dimension', fontsize=12, fontweight='bold')
-        plt.tight_layout()
+        fig.suptitle(
+            f"{fn}  -  Convergence per algorithm and dimension",
+            fontsize=12,
+            fontweight="bold",
+        )
 
-        fname = f'{fn}.png'
+        try:
+            plt.tight_layout()
+        except Exception:
+            logger.warning(
+                "tight_layout failed for %s – skipping layout adjustment", fn
+            )
+
+        fname = f"{fn}.png"
         path = os.path.join(output_dir, fname)
-        fig.savefig(path, dpi=200, bbox_inches='tight')
-        plt.close(fig)
-        saved_paths.append(path)
-        logger.info('Saved %s', path)
+        try:
+            fig.savefig(path, dpi=200, bbox_inches="tight")
+            saved_paths.append(path)
+            logger.info("Saved %s", path)
+        except Exception:
+            logger.exception("Failed to save plot for %s", fn)
+        finally:
+            plt.close(fig)
 
     return saved_paths
