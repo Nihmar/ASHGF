@@ -102,27 +102,26 @@ class SGES(BaseOptimizer):
         if not hasattr(self, "_last_evaluations") or not hasattr(self, "_last_M"):
             return
 
-        evaluations = self._last_evaluations
+        evaluations = self._last_evaluations  # (2*dim,) array
         M = self._last_M
         dim = len(x)
 
-        # r = average min(f_plus, f_minus) over gradient-subspace directions
-        r_vals = [min(evaluations[2 * j], evaluations[2 * j + 1]) for j in range(M)]
-        r = np.mean(r_vals) if r_vals else None
+        if M <= 0 or M >= dim:
+            return
 
-        # r_hat = same over random directions
-        r_hat_vals = [
-            min(evaluations[2 * j], evaluations[2 * j + 1]) for j in range(M, dim)
-        ]
-        r_hat = np.mean(r_hat_vals) if r_hat_vals else None
+        # Vectorised: reshape to (dim, 2) and take min per row
+        evals_pairs = evaluations.reshape(-1, 2)  # (dim, 2)
+        min_per_dir = np.min(evals_pairs, axis=1)  # (dim,)
 
-        if r is not None and r_hat is not None:
-            if r < r_hat:
-                self._current_alpha = min(self.delta * self._current_alpha, self.k1)
-            elif r >= r_hat:
-                self._current_alpha = max(
-                    (1.0 / self.delta) * self._current_alpha, self.k2
-                )
+        # r = mean of minima over gradient-subspace directions (0:M)
+        r = float(np.mean(min_per_dir[:M]))
+        # r_hat = mean of minima over random directions (M:dim)
+        r_hat = float(np.mean(min_per_dir[M:]))
+
+        if r < r_hat:
+            self._current_alpha = min(self.delta * self._current_alpha, self.k1)
+        else:
+            self._current_alpha = max((1.0 / self.delta) * self._current_alpha, self.k2)
 
     def grad_estimator(
         self, x: np.ndarray, f: Callable[[np.ndarray], float]
@@ -153,15 +152,13 @@ class SGES(BaseOptimizer):
 
             # Evaluate (parallel if ASHGF_N_JOBS > 1)
             results = _parallel_eval(f, points)
-            evaluations = np.array(results)
+            evaluations = np.asarray(results)
 
-            # Assemble gradient
-            grad = np.zeros(dim)
-            for i in range(dim):
-                f_plus = results[2 * i]
-                f_minus = results[2 * i + 1]
-                grad += (f_plus - f_minus) * directions[i]
-            grad /= 2 * self.sigma * dim
+            # ---- Vectorised gradient assembly ----
+            # diff[i] = f(x + σ·d_i) - f(x - σ·d_i)
+            diff = evaluations[0::2] - evaluations[1::2]  # (dim,)
+            grad = np.dot(diff, directions) / (2.0 * self.sigma * dim)
+
             self._last_evaluations = evaluations
         else:
             # Pure random directions during warm-up

@@ -1,9 +1,16 @@
+"""Gradient estimators: Gaussian smoothing, Gauss-Hermite quadrature, and
+Lipschitz-constant estimation.
+
+All critical loops are vectorised via NumPy to minimise Python-level
+overhead in high-dimensional settings.
+"""
+
 from __future__ import annotations
 
 import logging
 import math
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 import numpy as np
@@ -67,28 +74,17 @@ def _parallel_eval(
     -------
     list of float
         ``f(p)`` for each ``p`` in ``points``, in the same order.
-
-    Notes
-    -----
-    Parallelism is only used when ``n_jobs > 1`` **and** there are at
-    least 4 points to evaluate (to avoid thread-creation overhead for
-    tiny batches).
     """
     n = len(points)
     nj = _get_n_jobs(n_jobs)
 
     if nj <= 1 or n < 4:
-        # Sequential path — no overhead
         return [f(p) for p in points]
 
-    # Parallel path — useful for expensive ``f`` (e.g., RL environments)
-    results: list[float] = [0.0] * n
+    # Parallel path — use executor.map which preserves order and avoids
+    # the overhead of as_completed + dict bookkeeping.
     with ThreadPoolExecutor(max_workers=nj) as executor:
-        future_to_idx = {executor.submit(f, p): i for i, p in enumerate(points)}
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            results[idx] = future.result()
-    return results
+        return list(executor.map(f, points))
 
 
 __all__ = [
@@ -96,6 +92,11 @@ __all__ = [
     "gauss_hermite_derivative",
     "estimate_lipschitz_constants",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Gaussian smoothing
+# ---------------------------------------------------------------------------
 
 
 def gaussian_smoothing(
@@ -122,21 +123,19 @@ def gaussian_smoothing(
     directions : np.ndarray, shape (M, d)
         Matrix of random directions (one per row).
     n_jobs : int or None
-        Number of threads for parallel evaluation.  Default (None) uses
-        the env var ``ASHGF_N_JOBS`` (default 1 = sequential).
+        Number of threads for parallel evaluation.
 
     Returns
     -------
     grad : np.ndarray, shape (d,)
         Estimated gradient.
     """
-    dim = len(x)
     M = len(directions)
 
     # Pre-scale directions
     sigma_dirs = sigma * directions  # (M, d)
 
-    # Build flat list of all perturbed points
+    # Build flat list of all perturbed points (interleaved: +σd, -σd, ...)
     points: list[np.ndarray] = []
     for i in range(M):
         d = sigma_dirs[i]
@@ -146,15 +145,18 @@ def gaussian_smoothing(
     # Evaluate (parallel if n_jobs > 1)
     results = _parallel_eval(f, points, n_jobs=n_jobs)
 
-    # Assemble gradient
-    grad = np.zeros(dim)
-    for i in range(M):
-        f_plus = results[2 * i]
-        f_minus = results[2 * i + 1]
-        grad += (f_plus - f_minus) * directions[i]
+    # ---- Vectorised gradient assembly ----
+    # diff[j] = f(x + σ·d_j) - f(x - σ·d_j)
+    results_arr = np.asarray(results)  # (2M,)
+    diff = results_arr[0::2] - results_arr[1::2]  # (M,)
+    grad = np.dot(diff, directions) / (2.0 * sigma * M)  # (d,) = (M,) @ (M, d)
 
-    grad /= 2 * sigma * M
     return grad
+
+
+# ---------------------------------------------------------------------------
+# Gauss-Hermite quadrature
+# ---------------------------------------------------------------------------
 
 
 def gauss_hermite_derivative(
@@ -164,7 +166,7 @@ def gauss_hermite_derivative(
     basis: np.ndarray,
     m: int,
     value_at_x: float | None = None,
-) -> tuple[np.ndarray, dict, dict, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Estimate directional derivatives using Gauss-Hermite quadrature.
 
@@ -183,7 +185,7 @@ def gauss_hermite_derivative(
     sigma : float
         Smoothing bandwidth.
     basis : np.ndarray, shape (d, d)
-        Orthonormal basis matrix (each row is a direction).
+        Orthonormal basis matrix (each row is a direction vector b_i).
     m : int
         Number of quadrature points (must be odd for central node at 0).
     value_at_x : float or None
@@ -193,12 +195,12 @@ def gauss_hermite_derivative(
     -------
     grad : np.ndarray, shape (d,)
         Estimated gradient (sum of directional derivatives times basis vectors).
-    evaluations : dict
-        Dict mapping direction index i → numpy array of m evaluations.
-    points : dict
-        Dict mapping direction index i → array of quadrature nodes.
+    evals_matrix : np.ndarray, shape (d, m)
+        Matrix of function evaluations: row i = evaluations along direction i.
+    points : np.ndarray, shape (m,)
+        Quadrature nodes (shared across all directions).
     derivatives : np.ndarray, shape (d,)
-        Array of estimated directional derivatives.
+        Array of estimated directional derivatives D_i f(x).
     """
     dim = len(x)
     if value_at_x is None:
@@ -209,16 +211,11 @@ def gauss_hermite_derivative(
     sigma_p = sigma * p_nodes  # (m,)
     mid = m // 2
 
-    # Pre-allocate arrays to avoid per-direction list→array conversions
-    evaluations: dict[int, np.ndarray] = {}
-    points: dict[int, np.ndarray] = {}
-    derivatives = np.empty(dim)
-
     # Pre-compute scale factor for the quadrature
     quad_scale = 2.0 / (sigma * np.sqrt(math.pi))
 
     # ---- Build flat list of all non-central perturbed points ----
-    # Map each flat index to (direction_i, node_k)
+    # We evaluate f at x + sigma * p_k * b_i  for i in [0..d-1], k != mid.
     idx_map: list[tuple[int, int]] = []
     flat_points: list[np.ndarray] = []
     for i in range(dim):
@@ -230,71 +227,67 @@ def gauss_hermite_derivative(
     # ---- Evaluate all points (parallel if ASHGF_N_JOBS > 1) ----
     flat_results = _parallel_eval(f, flat_points)
 
-    # ---- Restructure results into per-direction arrays ----
-    for i in range(dim):
-        evals = np.empty(m)
-        evals[mid] = value_at_x  # central node at 0
-        evaluations[i] = evals
-        points[i] = p_nodes
+    # ---- Build evaluation matrix: (d, m) ----
+    # Fill central column with f(x); other entries from flat_results.
+    evals_matrix = np.empty((dim, m))
+    evals_matrix[:, mid] = value_at_x
 
     for idx_flat, (i, k) in enumerate(idx_map):
-        evaluations[i][k] = flat_results[idx_flat]
+        evals_matrix[i, k] = flat_results[idx_flat]
 
-    # ---- Compute directional derivatives ----
-    for i in range(dim):
-        # D_i f(x) = quad_scale · Σ p_w[k] · evals[k]
-        # Since p_w[mid] == 0, value_at_x contribution is zero.
-        derivatives[i] = quad_scale * np.dot(p_w, evaluations[i])
+    # ---- Compute directional derivatives (vectorised) ----
+    # derivatives[i] = quad_scale · Σ_k p_w[k] · evals_matrix[i, k]
+    # Since p_w[mid] == 0, value_at_x contributes nothing.
+    derivatives = quad_scale * (evals_matrix @ p_w)  # (d,) = (d, m) @ (m,)
 
-    # Vectorised gradient reconstruction:  ∇f = Σ_i D_i f · b_i  =  Bᵀ · D
+    # ---- Gradient reconstruction: ∇f = Σ_i D_i f · b_i = Bᵀ · D ----
     grad = basis.T @ derivatives  # (d,) = (d, d) @ (d,)
 
-    return grad, evaluations, points, derivatives
+    # The ``points`` return is kept as the 1-D array of nodes for
+    # compatibility with ``estimate_lipschitz_constants``.
+    return grad, evals_matrix, p_nodes, derivatives
+
+
+# ---------------------------------------------------------------------------
+# Lipschitz-constant estimation
+# ---------------------------------------------------------------------------
 
 
 def estimate_lipschitz_constants(
-    evaluations: dict[int, list[float] | np.ndarray],
-    points: dict[int, np.ndarray],
+    evaluations: np.ndarray,
+    points: np.ndarray,
     sigma: float,
 ) -> np.ndarray:
     """
     Estimate directional Lipschitz constants from quadrature data.
 
     For each direction i, compute
-    max |f(x+σ·p_{k+1}·b_i) - f(x+σ·p_k·b_i)| / (σ·|p_{k+1} - p_k|)
+        L_i = max_k |f(x+σ·p_{k+1}·b_i) - f(x+σ·p_k·b_i)| / (σ·|p_{k+1} - p_k|)
 
     Parameters
     ----------
-    evaluations : dict
-        Direction index → list or array of m function evaluations.
-    points : dict
-        Direction index → array of m quadrature nodes.
+    evaluations : np.ndarray, shape (d, m)
+        Matrix of function evaluations along each direction.
+    points : np.ndarray, shape (m,)
+        Quadrature nodes (shared across all directions).
     sigma : float
         Smoothing bandwidth.
 
     Returns
     -------
-    lipschitz : np.ndarray
+    lipschitz : np.ndarray, shape (d,)
         Estimated Lipschitz constants per direction.
     """
-    dim = len(evaluations)
-
-    # All directions share the same quadrature nodes
-    pts = points[0]
-
-    # Build matrix of evaluations: shape (dim, m)
-    evals_matrix = np.array([evaluations[i] for i in range(dim)])
-
-    # |f(x+σ·p_{k+1}·b_i) - f(x+σ·p_k·b_i)|  → shape (dim, m-1)
-    diff_evals = np.abs(np.diff(evals_matrix, axis=1))
+    # |f(x+σ·p_{k+1}·b_i) - f(x+σ·p_k·b_i)|  → shape (d, m-1)
+    diff_evals = np.abs(np.diff(evaluations, axis=1))  # (d, m-1)
 
     # σ·|p_{k+1} - p_k|  → shape (m-1,)
-    diff_pts = sigma * np.abs(np.diff(pts))
+    diff_pts = sigma * np.abs(np.diff(points))  # (m-1,)
 
-    # Ratios: shape (dim, m-1) / (m-1,) → (dim, m-1)
+    # Ratios: (d, m-1) / (m-1,) → (d, m-1)
     ratios = diff_evals / diff_pts[None, :]
 
-    # Max per direction → (dim,)
+    # Max per direction → (d,)
     lipschitz = np.max(ratios, axis=1)
 
     return lipschitz

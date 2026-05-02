@@ -77,6 +77,13 @@ def compute_directions_sges(
     the objective function), the gradient-subspace directions fall
     back to isotropic sampling.
 
+    **Optimisation note (std normalisation removed).**
+    Earlier versions applied an intermediate ``dirs_grad /= std(dirs_grad)``
+    before the final unit-norm normalisation.  Because dividing by
+    ``std(v)`` and then by ``‖v/σ‖`` is algebraically equivalent to
+    dividing by ``‖v‖`` alone, the intermediate step had no effect on
+    the result.  It has been removed to save a ``std`` + division pass.
+
     Examples
     --------
     >>> np.random.seed(42)
@@ -122,10 +129,6 @@ def compute_directions_sges(
         except (np.linalg.LinAlgError, ValueError):
             # Fallback: if Cholesky still fails, use isotropic directions
             dirs_grad = np.random.standard_normal((choices, dim))
-        # Vectorised scaling: normalise each direction by its std
-        stds = np.std(dirs_grad, axis=1, keepdims=True)  # (choices, 1)
-        stds = np.where(stds < 1e-12, 1.0, stds)
-        dirs_grad /= stds
 
     # --- Random (isotropic) directions ---
     n_random = dim - choices

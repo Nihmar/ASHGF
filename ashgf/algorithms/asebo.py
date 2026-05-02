@@ -119,6 +119,9 @@ class ASEBO(BaseOptimizer):
     thresh : float
         Explained-variance-ratio threshold for determining the active
         subspace dimension.
+    buffer_size : int
+        Maximum number of gradient vectors stored in the circular
+        history buffer.  Older entries are evicted in FIFO order.
     seed : int
         Random seed for reproducibility.
     eps : float
@@ -134,6 +137,7 @@ class ASEBO(BaseOptimizer):
         k: int = 50,
         lambd: float = 0.1,
         thresh: float = 1e-4,
+        buffer_size: int = 200,
         seed: int = 2003,
         eps: float = 1e-8,
     ) -> None:
@@ -152,6 +156,8 @@ class ASEBO(BaseOptimizer):
             raise ValueError(f"sigma must be > 0, got {sigma}")
         if k < 2:
             raise ValueError(f"k (warm-up) must be at least 2, got {k}")
+        if buffer_size < k:
+            raise ValueError(f"buffer_size ({buffer_size}) must be >= k ({k})")
         if not 0.0 <= lambd <= 1.0:
             raise ValueError(f"lambd must be in [0, 1], got {lambd}")
         if not 0.0 < thresh < 1.0:
@@ -160,13 +166,17 @@ class ASEBO(BaseOptimizer):
         self.lr = lr
         self.sigma = sigma
         self.k = k
+        self.buffer_size = buffer_size
         self.lambd = lambd
         self.thresh = thresh
 
         # ------------------------------------------------------------------
         # Internal state (initialised in _setup)
         # ------------------------------------------------------------------
-        self._G: np.ndarray | None = None  # gradient-history buffer (T, d)
+        # Circular buffer for gradient history: (buffer_size, dim)
+        self._G: np.ndarray | None = None
+        self._G_idx: int = 0  # next write position
+        self._G_count: int = 0  # number of entries stored (≤ buffer_size)
         self._alpha: float = 1.0  # current blending parameter
 
     # ------------------------------------------------------------------
@@ -178,7 +188,9 @@ class ASEBO(BaseOptimizer):
 
     def _setup(self, f: Callable[[np.ndarray], float], dim: int, x: np.ndarray) -> None:
         """Reset internal state before a fresh optimisation run."""
-        self._G = None
+        self._G = np.zeros((self.buffer_size, dim))
+        self._G_idx = 0
+        self._G_count = 0
         self._alpha = 1.0
 
     # ------------------------------------------------------------------
@@ -203,10 +215,11 @@ class ASEBO(BaseOptimizer):
         # ==============================================================
         # 1. Determine active-subspace dimension and projectors
         # ==============================================================
-        if self._G is not None and self._G.shape[0] >= self.k:
-            # --- PCA on gradient-history buffer ---
+        if self._G is not None and self._G_count >= self.k:
+            # --- PCA on the *valid* portion of the gradient-history buffer ---
+            G_valid = self._G[: self._G_count]  # (count, d)
             pca = _PCA()  # type: ignore[misc]  # validated in __init__
-            pca.fit(self._G)
+            pca.fit(G_valid)
 
             var_cumsum = np.cumsum(pca.explained_variance_ratio_)
             n_components = int(np.argmax(var_cumsum >= self.thresh) + 1)
@@ -217,23 +230,16 @@ class ASEBO(BaseOptimizer):
             U_active = pca.components_[:n_components]  # (r, d)
             P_active = np.dot(U_active.T, U_active)  # (d, d)
 
-            # Orthogonal-complement projector  P_ort = U_ort^T @ U_ort
-            U_ort = pca.components_[n_components:]  # (d-r, d)
-            if U_ort.shape[0] > 0:
-                P_ort = np.dot(U_ort.T, U_ort)
-            else:
-                P_ort = np.zeros((dim, dim))
-
             # Number of Monte Carlo directions M
-            if self._G.shape[0] == self.k:
+            if self._G_count == self.k:
                 # First PCA iteration – use more samples for stability
                 M = 100
             else:
                 M = n_components
         else:
             # --- Warm-up phase: isotropic sampling ---
+            U_active = np.empty((0, dim))  # empty, for alpha update
             P_active = np.zeros((dim, dim))
-            P_ort = np.eye(dim)
             n_components = dim  # placeholder (not used in covariance)
             M = 100
 
@@ -242,7 +248,7 @@ class ASEBO(BaseOptimizer):
         #    Σ = σ·[ (α/d)·I_d  +  ((1-α)/r)·P_active ] + λ·I_d
         # ==============================================================
         cov = (self._alpha / dim) * np.eye(dim) + (
-            (1.0 - self._alpha) / n_components
+            (1.0 - self._alpha) / max(n_components, 1)
         ) * P_active
         cov *= self.sigma
 
@@ -267,7 +273,7 @@ class ASEBO(BaseOptimizer):
             A = np.random.randn(M, dim)
 
         # ==============================================================
-        # 4. Antithetic gradient estimation (pre-scaled directions)
+        # 4. Antithetic gradient estimation (vectorised)
         # ==============================================================
         sigma_A = self.sigma * A  # (M, d) pre-scaled
         points: list[np.ndarray] = []
@@ -279,38 +285,41 @@ class ASEBO(BaseOptimizer):
         # Evaluate (parallel if ASHGF_N_JOBS > 1)
         results = _parallel_eval(f, points)
 
-        # Assemble gradient
-        grad = np.zeros(dim)
-        for j in range(M):
-            f_plus = results[2 * j]
-            f_minus = results[2 * j + 1]
-            grad += (f_plus - f_minus) * A[j]
-
-        # FIXED (Bug 1.5.2): divide by M – was missing in original,
-        # resulting in a gradient scaled by M.
-        grad /= 2.0 * self.sigma * M
+        # ---- Vectorised gradient assembly ----
+        # diff[j] = f(x + σ·d_j) - f(x - σ·d_j)
+        results_arr = np.asarray(results)  # (2M,)
+        diff = results_arr[0::2] - results_arr[1::2]  # (M,)
+        grad = np.dot(diff, A) / (2.0 * self.sigma * M)  # (d,) = (M,) @ (M, d)
 
         # ==============================================================
-        # 5. Update gradient-history buffer (exponential decay)
+        # 5. Update circular gradient-history buffer
         # ==============================================================
-        g_row = grad.reshape(1, -1)
-        if self._G is None:
-            self._G = g_row
-        else:
-            self._G *= 0.99
-            self._G = np.vstack([self._G, g_row])
+        # Exponential decay on existing entries
+        if self._G_count > 0:
+            self._G[: self._G_count] *= 0.99
+        self._G[self._G_idx] = grad
+        self._G_idx = (self._G_idx + 1) % self.buffer_size
+        self._G_count = min(self._G_count + 1, self.buffer_size)
 
         # ==============================================================
         # 6. Adapt blending parameter α
         #    α ← clip(‖P_ort·g‖ / ‖P_active·g‖, 0, 1)
-        #    If the gradient lies mostly in the active subspace, α → 0
-        #    and future directions concentrate there.  If the gradient
-        #    has a large orthogonal component, α → 1 and directions
-        #    become more isotropic.
+        #
+        #    Optimisation: instead of building the (d×d) matrix P_ort
+        #    explicitly, we use the identity
+        #        ‖P_ort·g‖² = ‖g‖² - ‖P_active·g‖²
+        #    which follows from the Pythagorean theorem since the two
+        #    subspaces are orthogonal complements.
         # ==============================================================
-        if self._G is not None and self._G.shape[0] >= self.k:
-            norm_ort = float(np.linalg.norm(np.dot(grad, P_ort)))
-            norm_active = float(np.linalg.norm(np.dot(grad, P_active)))
+        if self._G_count >= self.k and U_active.shape[0] > 0:
+            # Projection onto active subspace: g_active = U_active @ g  (r,)
+            g_active = np.dot(U_active, grad)  # (r,)
+            norm_active_sq = float(np.dot(g_active, g_active))
+            norm_total_sq = float(np.dot(grad, grad))
+            norm_ort_sq = max(norm_total_sq - norm_active_sq, 0.0)
+
+            norm_active = np.sqrt(norm_active_sq)
+            norm_ort = np.sqrt(norm_ort_sq)
 
             if norm_active > 1e-12:
                 self._alpha = norm_ort / norm_active

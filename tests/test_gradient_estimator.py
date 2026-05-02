@@ -97,7 +97,13 @@ class TestGaussHermiteDerivative:
         assert rel_error < 1e-6, f"Relative error {rel_error:.2e} too high"
 
     def test_output_shapes(self):
-        """Check shapes of all returned arrays."""
+        """Check shapes of all returned arrays.
+
+        .. note::
+           Since the estimators module was refactored to use
+           matrix-based returns, ``evals_matrix`` is ``(dim, m)``
+           and ``p_nodes`` is ``(m,)``.
+        """
         from scipy.stats import special_ortho_group
 
         rng = np.random.default_rng(42)
@@ -111,17 +117,14 @@ class TestGaussHermiteDerivative:
         basis = special_ortho_group.rvs(dim)
         m = 5
 
-        grad, evaluations, points, derivatives = gauss_hermite_derivative(
+        grad, evals_matrix, p_nodes, derivatives = gauss_hermite_derivative(
             x, f, sigma, basis, m
         )
 
         assert grad.shape == (dim,)
         assert derivatives.shape == (dim,)
-        assert len(evaluations) == dim
-        assert len(points) == dim
-        for i in range(dim):
-            assert len(evaluations[i]) == m
-            assert len(points[i]) == m
+        assert evals_matrix.shape == (dim, m)
+        assert p_nodes.shape == (m,)
 
 
 class TestEstimateLipschitzConstants:
@@ -144,10 +147,10 @@ class TestEstimateLipschitzConstants:
         basis = special_ortho_group.rvs(dim)
         m = 5
 
-        _, evaluations, points, _ = gauss_hermite_derivative(
+        _, evals_matrix, p_nodes, _ = gauss_hermite_derivative(
             x, f, sigma, basis, m, f(x)
         )
-        lipschitz = estimate_lipschitz_constants(evaluations, points, sigma)
+        lipschitz = estimate_lipschitz_constants(evals_matrix, p_nodes, sigma)
 
         assert lipschitz.shape == (dim,)
         assert np.all(lipschitz > 0)
