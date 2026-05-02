@@ -26,18 +26,30 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _sanitize_for_log(values, default: float = 1e-30):
+def _sanitize_for_log(values, default: float = 1e-30, max_val: float = 1e150):
     """Return a copy of *values* safe for log-scale axes.
 
     Replaces ``inf``, ``-inf``, ``NaN``, zero, and negative values
-    with *default* (a tiny positive number) so that matplotlib log
-    tickers don't choke.
+    with *default* (a tiny positive number).
+    Also clips values above *max_val* so that the log-locator
+    never tries to compute ``10**decade`` for ``decade > 308``.
     """
     arr = np.asarray(values, dtype=float)
     mask = ~np.isfinite(arr) | (arr <= 0.0)
-    out = arr.copy()
+    out = np.clip(arr, default, max_val)
     out[mask] = default
     return out.tolist()
+
+
+def _safe_log_scale(ax, default_ylim=(1e-30, 1e2)):
+    """Set log scale on *ax* and enforce finite, positive y-limits."""
+    ax.set_yscale("log", nonpositive="clip")
+    lo, hi = ax.get_ylim()
+    if not (np.isfinite(lo) and np.isfinite(hi) and lo > 0 and hi > 0):
+        lo, hi = default_ylim
+    if hi / lo < 10:
+        hi = lo * 10
+    ax.set_ylim(lo, hi)
 
 
 # ---------------------------------------------------------------------------
@@ -477,14 +489,14 @@ def plot_statistics(
             linestyle="--",
         )
 
-    ax1.set_yscale("log")
+    _safe_log_scale(ax1)
     ax1.set_xlabel("Iteration")
     ax1.set_ylabel("f(x)  (mean ± std)")
     ax1.set_title(f"{function} — Mean convergence")
     ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
 
-    ax2.set_yscale("log")
+    _safe_log_scale(ax2)
     ax2.set_xlabel("Iteration")
     ax2.set_ylabel("f(x)  (min / max)")
     ax2.set_title(f"{function} — Envelope")
@@ -650,7 +662,7 @@ def plot_benchmark_comparison(
             clean_vals = _sanitize_for_log(values)
             ax.bar(x + i * width, clean_vals, width, label=algo, color=color)
 
-        ax.set_yscale("log")
+        _safe_log_scale(ax)
         ax.set_xticks(x + width * (n_algos - 1) / 2)
         ax.set_xticklabels(func_names_sorted, rotation=45, ha="right", fontsize=7)
         ax.set_ylabel("Best f(x)")
@@ -752,7 +764,7 @@ def plot_convergence_grid(
                     ax.plot(clean, label=algo, color=color, linewidth=0.8)
                 else:
                     ax.plot([1e-30, 1e-30], label=algo, color=color, linewidth=0.8)
-            ax.set_yscale("log")
+            _safe_log_scale(ax)
             ax.set_xlabel("Iteration")
             if col == 0:
                 ax.set_ylabel(fn[:30])
@@ -852,7 +864,7 @@ def plot_per_function(
                 else:
                     # still need a non-empty safe range so log scale doesn't break
                     ax.plot([1e-30, 1e-30], color=color, linewidth=0.8)
-                ax.set_yscale("log")
+                _safe_log_scale(ax)
                 ax.grid(True, alpha=0.2)
                 if row == 0:
                     ax.set_title(algo, fontsize=10, fontweight="bold")
