@@ -179,7 +179,7 @@ impl ASHGFS {
             let g = self.grad_estimator(&x, f, rng);
             if !g.iter().all(|v| v.is_finite()) { break; }
             let a = self.step_size();
-            let xn = if options.maximize { &x + &(a * &g) } else { &x - &(a * &g) };
+            let mut xn = if options.maximize { &x + &(a * &g) } else { &x - &(a * &g) };
             if !xn.iter().all(|v| v.is_finite()) { break; }
             let mut cur = f(&xn);
             if self.safeguard_active && !options.maximize && cur.is_finite() && fp.is_finite() && cur > fp {
@@ -190,9 +190,13 @@ impl ASHGFS {
                     let xn2 = if options.maximize { &x + &(a2 * &g2) } else { &x - &(a2 * &g2) };
                     if xn2.iter().all(|v| v.is_finite()) {
                         let cv2 = f(&xn2);
-                        if cv2.is_finite() && cv2 <= fp { cur = cv2; }
-                    }
-                }
+                        if cv2.is_finite() && cv2 <= fp {
+                            cur = cv2; xn = xn2;  // retry succeeded
+                        } else {
+                            cur = fp; xn = x.clone();  // reject: keep previous x
+                        }
+                    } else { cur = fp; xn = x.clone(); }
+                } else { cur = fp; xn = x.clone(); }
             }
             if !cur.is_finite() { av.push(cur); break; }
             av.push(cur);
@@ -409,11 +413,11 @@ impl Optimizer for ASHGFS {
         let seed = rng.seed;
         self.safeguard_active = false;
         let r1 = self._run(f, dim, x_init, options, &mut SeededRng::new(seed));
-        let b1 = r1.best_values.last().map(|(_,v)| *v).unwrap_or(f64::INFINITY);
+        let b1 = *r1.all_values.last().unwrap_or(&f64::INFINITY);
         self.safeguard_active = true;
         let r2 = self._run(f, dim, x_init, options, &mut SeededRng::new(seed));
-        let b2 = r2.best_values.last().map(|(_,v)| *v).unwrap_or(f64::INFINITY);
-        if b1 <= b2 { r1 } else { r2 }
+        let b2 = *r2.all_values.last().unwrap_or(&f64::INFINITY);
+        if b1.is_finite() && (!b2.is_finite() || b1 <= b2) { r1 } else if b2.is_finite() { r2 } else { r1 }
     }
 
 }

@@ -204,6 +204,7 @@ fn run(cli: Cli) -> i32 {
                     AlgoName::Asgf,
                     AlgoName::Ashgf,
                     AlgoName::AshgfNg,
+                    AlgoName::AshgfS,
                     AlgoName::Asebo,
                 ]
             });
@@ -373,6 +374,7 @@ fn run(cli: Cli) -> i32 {
                     AlgoName::Asgf,
                     AlgoName::Ashgf,
                     AlgoName::AshgfNg,
+                    AlgoName::AshgfS,
                 ]
             });
 

@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 
-from ashgf.algorithms import ASEBO, ASGF, ASHGF, ASHGFNG, GD, SGES
+from ashgf.algorithms import ASEBO, ASGF, ASHGF, ASHGFNG, ASHGFS, GD, SGES
 from ashgf.algorithms.base import BaseOptimizer
 from ashgf.functions import get_function, list_functions
 
@@ -64,6 +64,7 @@ ALGORITHMS: dict[str, type[BaseOptimizer]] = {
     "ASHGF": ASHGF,
     "ASEBO": ASEBO,
     "ASHGF-NG": ASHGFNG,
+    "ASHGF-S": ASHGFS,
 }
 
 DEFAULT_LR = 1e-4
@@ -82,6 +83,8 @@ def _make_algorithm(
         return algo_cls(lr=lr, sigma=sigma, seed=seed)  # type: ignore[call-arg]
     elif algo_name == "ASHGF-NG":
         return algo_cls(seed=seed, n_jobs=1)  # type: ignore[call-arg]
+    elif algo_name == "ASHGF-S":
+        return algo_cls(seed=seed)  # type: ignore[call-arg]
     else:
         # ASGF and ASHGF are fully adaptive
         return algo_cls(seed=seed)  # type: ignore[call-arg]
