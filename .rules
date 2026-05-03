@@ -6,4 +6,12 @@ Il codice che scriverai sarà matematicamente fedele e ben documentato.
 
 Piuttosto che allucinare, dovresti fermarti, pensare e eventualmente chiedere conferma.
 
-Non provare mai a cancellare il codice originario in src_old e la tesi in thesis
+Non provare mai a cancellare il codice originario in src_old e la tesi in thesis.
+
+La struttura del codice è:
+- thesis: la tesi originale in Latex
+- src_old: codice sorgente originale in python
+- src: il codice sorgente in Rust
+- ashgf: la nuova versione del codice in python
+
+Ignora src_old per i confronti e usa ashgf come riferimento a implentazione python.
