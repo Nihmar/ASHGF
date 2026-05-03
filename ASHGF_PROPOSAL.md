@@ -220,7 +220,12 @@ puntuale di α è la media della Beta:
 
 ---
 
-### 3.3 Evoluzione geodetica della base (`basis_evolution`)
+### 3.3 Evoluzione della base via riflessione di Householder (v3)
+
+> **Sostituito:** la versione originale usava un blend con una base quasi
+> interamente casuale (solo 1 direzione strutturata su d). Ora usa una
+> **riflessione di Householder parziale** che ruota solo la prima direzione
+> verso il gradiente, preservando la struttura delle altre  direzioni. (`basis_evolution`)
 
 **Idea**: invece di resettare la base quando σ è piccolo, la facciamo
 evolvere in modo continuo tramite piccole rotazioni sullo **Stiefel
@@ -267,13 +272,16 @@ Questo preserva la storia recente pur esplorando nuove direzioni.
 
 ---
 
-### 3.4 Momento di Nesterov adattivo (`nesterov_momentum`)
+### 3.4 Momento di Nesterov adattivo (v3: disabilitato durante warm-up)
+
+> **Fix v3:**  per le prime  iterazioni (warm-up). Con gradienti
+> molto noisy (base casuale), il momento accumulerebbe rumore senza beneficio. (`nesterov_momentum`)
 
 **Idea**: aggiungiamo il momento di Nesterov, che è notoriamente ottimale
 per funzioni convesse lisce e aiuta molto su funzioni mal condizionate.
 
 ```
-v_{k+1} = μ_k·v_k + step_k·∇f(x_k + μ_k·v_k)
+v_{k+1} = μ_k·v_k + step_k·∇f(y_k)  where  y_k = x_k + μ_k·v_k (look-ahead)
 x_{k+1} = x_k - v_{k+1}
 ```
 
@@ -304,7 +312,12 @@ dove `Δf_k = f(x_k) - f(x_{k-1})` e `δ` è una scala caratteristica.
 
 ---
 
-### 3.5 Controllo trust-region del passo (`trust_region_step`)
+### 3.5 Controllo trust-region del passo — **RIMOSSO** (v3)
+
+> **Rimosso dopo test.** Con gradienti stimati (noisy), il rapporto
+>  è sistematicamente distorto verso il basso dal termine
+>  in , causando backtracking eccessivo
+> e convergenza prematura. Il passo  è già sufficientemente adattivo. (`trust_region_step`)
 
 **Idea**: il passo `σ/L_nabla` può essere troppo ottimistico.  Verifichiamo
 la qualità del passo confrontando la **riduzione predetta** con quella

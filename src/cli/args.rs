@@ -32,6 +32,8 @@ pub enum AlgoName {
     Sges,
     Asgf,
     Ashgf,
+    AshgfNg,
+    AshgfS,
     Asebo,
 }
 
@@ -42,6 +44,8 @@ impl std::fmt::Display for AlgoName {
             AlgoName::Sges => write!(f, "sges"),
             AlgoName::Asgf => write!(f, "asgf"),
             AlgoName::Ashgf => write!(f, "ashgf"),
+            AlgoName::AshgfNg => write!(f, "ashgf-ng"),
+            AlgoName::AshgfS => write!(f, "ashgf-s"),
             AlgoName::Asebo => write!(f, "asebo"),
         }
     }

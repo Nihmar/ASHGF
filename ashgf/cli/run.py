@@ -8,7 +8,7 @@ import os
 import sys
 
 from ashgf import __version__
-from ashgf.algorithms import ASEBO, ASGF, ASHGF, GD, SGES
+from ashgf.algorithms import ASEBO, ASGF, ASHGF, ASHGFNG, GD, SGES
 from ashgf.benchmark import (
     benchmark,
     benchmark_multi,
@@ -44,6 +44,7 @@ ALGORITHMS = {
     "asgf": ASGF,
     "ashgf": ASHGF,
     "asebo": ASEBO,
+    "ashgf-ng": ASHGFNG,
 }
 
 
@@ -305,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.algo in ("gd", "sges", "asebo"):
                 algo_kwargs["lr"] = args.lr
                 algo_kwargs["sigma"] = args.sigma
+            elif args.algo == "ashgf-ng":
+                algo_kwargs["n_jobs"] = 1
             algo = algo_cls(**algo_kwargs)
 
             best_vals, all_vals = algo.optimize(
@@ -324,6 +327,8 @@ def main(argv: list[str] | None = None) -> int:
                 if algo_name in ("gd", "sges", "asebo"):
                     algo_kwargs["lr"] = args.lr
                     algo_kwargs["sigma"] = args.sigma
+                elif algo_name == "ashgf-ng":
+                    algo_kwargs["n_jobs"] = 1
                 algo = algo_cls(**algo_kwargs)
                 _, all_vals = algo.optimize(
                     f,

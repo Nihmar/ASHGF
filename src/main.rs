@@ -5,7 +5,7 @@ use std::process;
 use std::fs;
 use std::path::Path;
 
-use ashgf::algorithms::{OptimizeOptions, Optimizer, ASEBO, ASGF, ASHGF, GD, SGES};
+use ashgf::algorithms::{OptimizeOptions, Optimizer, ASEBO, ASGF, ASHGF, ASHGFNG, ASHGFS, GD, SGES};
 use ashgf::benchmark::plot::{plot_comparison_bars, plot_convergence_grid, plot_per_function};
 use ashgf::benchmark::runner::run_benchmarks_with_history;
 use ashgf::cli::args::{AlgoName, Cli, Command};
@@ -73,6 +73,22 @@ fn run(cli: Cli) -> i32 {
                     let mut algo = ASHGF::default();
                     algo.optimize(&f, args.dim, None, &options, &mut rng)
                 }
+                AlgoName::AshgfS => {
+                    let mut algo = ASHGFS::default();
+                    algo.optimize(&f, args.dim, None, &options, &mut rng)
+                }
+                    AlgoName::AshgfS => {
+                        let mut algo = ASHGFS::default();
+                        algo.optimize(&f, args.dim, None, &options, &mut rng)
+                    }
+                        AlgoName::AshgfS => {
+                            let mut algo = ASHGFS::default();
+                            algo.optimize(&f, args.dim, None, &options, &mut rng)
+                        }
+                AlgoName::AshgfNg => {
+                    let mut algo = ASHGFNG::default();
+                    algo.optimize(&f, args.dim, None, &options, &mut rng)
+                }
                 AlgoName::Asebo => {
                     let mut algo = ASEBO::default();
                     algo.optimize(&f, args.dim, None, &options, &mut rng)
@@ -128,6 +144,22 @@ fn run(cli: Cli) -> i32 {
                         let mut algo = ASHGF::default();
                         algo.optimize(&f, args.dim, None, &options, &mut rng)
                     }
+                AlgoName::AshgfS => {
+                    let mut algo = ASHGFS::default();
+                    algo.optimize(&f, args.dim, None, &options, &mut rng)
+                }
+                    AlgoName::AshgfS => {
+                        let mut algo = ASHGFS::default();
+                        algo.optimize(&f, args.dim, None, &options, &mut rng)
+                    }
+                        AlgoName::AshgfS => {
+                            let mut algo = ASHGFS::default();
+                            algo.optimize(&f, args.dim, None, &options, &mut rng)
+                        }
+                    AlgoName::AshgfNg => {
+                        let mut algo = ASHGFNG::default();
+                        algo.optimize(&f, args.dim, None, &options, &mut rng)
+                    }
                     AlgoName::Asebo => {
                         let mut algo = ASEBO::default();
                         algo.optimize(&f, args.dim, None, &options, &mut rng)
@@ -171,6 +203,7 @@ fn run(cli: Cli) -> i32 {
                     AlgoName::Sges,
                     AlgoName::Asgf,
                     AlgoName::Ashgf,
+                    AlgoName::AshgfNg,
                     AlgoName::Asebo,
                 ]
             });
@@ -180,6 +213,8 @@ fn run(cli: Cli) -> i32 {
             let mut sges = SGES::new(args.lr, args.sigma, 0.9, 0.1, 0.5, 1.1, 50, 1e-8);
             let mut asgf = ASGF::default();
             let mut ashgf = ASHGF::default();
+            let mut ashgf_ng = ASHGFNG::default();
+            let mut ashgf_s = ASHGFS::default();
             let mut asebo = ASEBO::default();
 
             // Set parallelism from CLI (0 = auto-detect via rayon)
@@ -187,6 +222,8 @@ fn run(cli: Cli) -> i32 {
             sges.n_jobs = args.jobs;
             asgf.n_jobs = args.jobs;
             ashgf.n_jobs = args.jobs;
+            ashgf_ng.n_jobs = args.jobs;
+            ashgf_s.n_jobs = args.jobs;
             asebo.n_jobs = args.jobs;
 
             // Push each algorithm only once; borrow checker needs separate statements
@@ -201,6 +238,12 @@ fn run(cli: Cli) -> i32 {
             }
             if algos_to_run.contains(&AlgoName::Ashgf) {
                 algorithms.push(("ASHGF", &mut ashgf));
+            }
+            if algos_to_run.contains(&AlgoName::AshgfS) {
+                algorithms.push(("ASHGF-S", &mut ashgf_s));
+            }
+            if algos_to_run.contains(&AlgoName::AshgfNg) {
+                algorithms.push(("ASHGF-NG", &mut ashgf_ng));
             }
             if algos_to_run.contains(&AlgoName::Asebo) {
                 algorithms.push(("ASEBO", &mut asebo));
@@ -329,6 +372,7 @@ fn run(cli: Cli) -> i32 {
                     AlgoName::Sges,
                     AlgoName::Asgf,
                     AlgoName::Ashgf,
+                    AlgoName::AshgfNg,
                 ]
             });
 
@@ -368,6 +412,22 @@ fn run(cli: Cli) -> i32 {
                         }
                         AlgoName::Ashgf => {
                             let mut algo = ASHGF::default();
+                            algo.optimize(&f, args.dim, None, &options, &mut rng)
+                        }
+                AlgoName::AshgfS => {
+                    let mut algo = ASHGFS::default();
+                    algo.optimize(&f, args.dim, None, &options, &mut rng)
+                }
+                    AlgoName::AshgfS => {
+                        let mut algo = ASHGFS::default();
+                        algo.optimize(&f, args.dim, None, &options, &mut rng)
+                    }
+                        AlgoName::AshgfS => {
+                            let mut algo = ASHGFS::default();
+                            algo.optimize(&f, args.dim, None, &options, &mut rng)
+                        }
+                        AlgoName::AshgfNg => {
+                            let mut algo = ASHGFNG::default();
                             algo.optimize(&f, args.dim, None, &options, &mut rng)
                         }
                         AlgoName::Asebo => {

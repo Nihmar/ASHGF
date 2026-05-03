@@ -96,20 +96,20 @@ pub fn plot_comparison_bars(results: &[RunResult], output_path: &Path) {
         let panel = &panels[col];
         let n_funcs = funcs.len();
 
-        // Determine y range
-        let all_vals: Vec<f64> = funcs
-            .iter()
-            .filter_map(|f| lookup.get(&(f.clone(), dim, algos[0].clone())).copied())
-            .map(safe_log_val)
-            .collect();
-        let y_min = all_vals
-            .iter()
-            .fold(f64::INFINITY, |a, &b| a.min(b))
-            .max(1e-30_f64);
-        let y_max = all_vals
-            .iter()
-            .fold(0.0f64, |a, &b| a.max(b))
-            .max(y_min * 10.0);
+        // Determine y range — iterate all (func, algo) pairs
+        let mut y_min = f64::INFINITY;
+        let mut y_max = 0.0f64;
+        for f in funcs.iter() {
+            for a in algos.iter() {
+                if let Some(&v) = lookup.get(&(f.clone(), dim, a.clone())) {
+                    let sv = safe_log_val(v);
+                    y_min = y_min.min(sv);
+                    y_max = y_max.max(sv);
+                }
+            }
+        }
+        y_min = y_min.max(1e-30_f64);
+        y_max = y_max.max(y_min * 10.0);
 
         let mut chart = ChartBuilder::on(panel)
             .caption(format!("dim = {dim}"), ("sans-serif", 22))

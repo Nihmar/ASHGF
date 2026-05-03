@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 
-from ashgf.algorithms import ASEBO, ASGF, ASHGF, GD, SGES
+from ashgf.algorithms import ASEBO, ASGF, ASHGF, ASHGFNG, GD, SGES
 from ashgf.algorithms.base import BaseOptimizer
 from ashgf.functions import get_function, list_functions
 
@@ -63,6 +63,7 @@ ALGORITHMS: dict[str, type[BaseOptimizer]] = {
     "ASGF": ASGF,
     "ASHGF": ASHGF,
     "ASEBO": ASEBO,
+    "ASHGF-NG": ASHGFNG,
 }
 
 DEFAULT_LR = 1e-4
@@ -79,6 +80,8 @@ def _make_algorithm(
     algo_cls = ALGORITHMS[algo_name]
     if algo_name in ("GD", "SGES", "ASEBO"):
         return algo_cls(lr=lr, sigma=sigma, seed=seed)  # type: ignore[call-arg]
+    elif algo_name == "ASHGF-NG":
+        return algo_cls(seed=seed, n_jobs=1)  # type: ignore[call-arg]
     else:
         # ASGF and ASHGF are fully adaptive
         return algo_cls(seed=seed)  # type: ignore[call-arg]
@@ -208,8 +211,7 @@ def benchmark(
         # Parallel execution via ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=n_jobs) as executor:
             futures = {
-                executor.submit(_run_benchmark_task, *task): task[:2]
-                for task in tasks
+                executor.submit(_run_benchmark_task, *task): task[:2] for task in tasks
             }
             for fut in as_completed(futures):
                 algo_name, func_name = futures[fut]
