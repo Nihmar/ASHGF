@@ -163,9 +163,9 @@ impl ASHGFS {
         }
     }
 
-    fn _run(&mut self, f: &(dyn Fn(&Array1<f64>) -> f64 + Sync), dim: usize,
-            x_init: Option<&Array1<f64>>, options: &OptimizeOptions,
-            rng: &mut SeededRng) -> OptimizeResult {
+    pub fn _run(&mut self, f: &(dyn Fn(&Array1<f64>) -> f64 + Sync), dim: usize,
+                x_init: Option<&Array1<f64>>, options: &OptimizeOptions,
+                rng: &mut SeededRng) -> OptimizeResult {
         let eps = self.eps();
         let mut x = if let Some(x0) = x_init { x0.clone() } else {
             Array1::from_shape_fn(dim, |_| rand::Rng::sample(&mut rng.rng, rand_distr::StandardNormal))
@@ -190,11 +190,8 @@ impl ASHGFS {
                     let xn2 = if options.maximize { &x + &(a2 * &g2) } else { &x - &(a2 * &g2) };
                     if xn2.iter().all(|v| v.is_finite()) {
                         let cv2 = f(&xn2);
-                        if cv2.is_finite() && cv2 <= fp {
-                            cur = cv2; xn = xn2;  // retry succeeded
-                        } else {
-                            cur = fp; xn = x.clone();  // reject: keep previous x
-                        }
+                        if cv2.is_finite() && cv2 <= fp { cur = cv2; xn = xn2; }
+                        else { cur = fp; xn = x.clone(); }
                     } else { cur = fp; xn = x.clone(); }
                 } else { cur = fp; xn = x.clone(); }
             }
@@ -217,7 +214,9 @@ impl ASHGFS {
         }
         OptimizeResult { best_values: bv, all_values: av, iterations: ai, converged: ai < options.max_iter }
     }
+
 }
+
 impl Optimizer for ASHGFS {
     fn kind(&self) -> &'static str {
         "ASHGF-S"
@@ -407,7 +406,6 @@ impl Optimizer for ASHGFS {
 
         grad
     }
-
     fn optimize(&mut self, f: &(dyn Fn(&Array1<f64>) -> f64 + Sync), dim: usize,
                 x_init: Option<&Array1<f64>>, options: &OptimizeOptions, rng: &mut SeededRng) -> OptimizeResult {
         let seed = rng.seed;
@@ -419,6 +417,7 @@ impl Optimizer for ASHGFS {
         let b2 = *r2.all_values.last().unwrap_or(&f64::INFINITY);
         if b1.is_finite() && (!b2.is_finite() || b1 <= b2) { r1 } else if b2.is_finite() { r2 } else { r1 }
     }
+
 
 }
 
