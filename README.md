@@ -2,7 +2,7 @@
 
 Repository for the master's thesis: [Link](https://thesis.unipd.it/handle/20.500.12608/21569)
 
-**Dual implementation** — a Python package and a Rust library for **derivative-free optimization** implementing algorithms based on Gaussian smoothing and directional derivative estimation. The Rust port is a high-performance, mathematically verified translation of the Python reference.
+**Dual implementation** — a Python package (`ashgf/`) and a Rust library (`src/`) for **derivative-free optimization** implementing algorithms based on Gaussian smoothing and directional derivative estimation. The Rust port is a high-performance, mathematically verified translation of the `ashgf/` Python reference.  Il codice originale `src_old/` è deprecato e conservato solo per archivio storico.
 
 ---
 
@@ -246,7 +246,9 @@ The Rust code has been verified against the thesis for:
 
 ---
 
-## 🐍 Python Implementation
+## 🐍 Python Implementation (`ashgf/`)
+
+> Il codice originale `src_old/` è deprecato.  L'implementazione Python di riferimento è `ashgf/`.
 
 | Algorithm | Description |
 |-----------|-------------|
@@ -612,7 +614,8 @@ tests/
 ├── test_algorithms.py
 ├── test_sampling.py
 └── regression/
-src_old/                   # Original codebase (preserved for reference)
+src_old/                   # ⚠️ DEPRECATED — codice originale (conservato solo per archivio storico)
+ashgf/                     # Implementazione Python di riferimento
 thesis/                    # LaTeX thesis sources and PDF
 ```
 
@@ -647,7 +650,8 @@ thesis/                    # LaTeX thesis sources and PDF
 
 All **80 test functions** across `classic.py`, `extended.py`, `benchmark.py`, and `rl.py`
 have been verified for mathematical equivalence with the original `src_old/functions.py`
-implementation. Each function was checked for:
+implementation (deprecated) and validated against the reference `ashgf/` package.
+Each function was checked for:
 - Correct formula translation
 - Proper handling of odd-length arrays in pairwise slicing
 - Consistent constant values

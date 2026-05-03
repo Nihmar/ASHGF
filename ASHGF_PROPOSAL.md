@@ -608,8 +608,9 @@ per varianza inversa (multi-fidelity gradient estimation).
 
 ## Riferimenti
 
-- **ASHGF originale**: tesi di laurea in `thesis/`, implementazione in
-  `src_old/`, reimplementazione Rust in `src/algorithms/ashgf.rs`.
+- **ASHGF originale**: tesi di laurea in `thesis/`, implementazione Python
+  di riferimento in `ashgf/`, reimplementazione Rust in `src/algorithms/ashgf.rs`.
+  Il codice originale deprecato è in `src_old/` (solo per archivio storico).
 - **Nesterov momentum**: Nesterov, Y. (1983). "A method for solving the
   convex programming problem with convergence rate O(1/k²)".
 - **Trust-region methods**: Conn, Gould, Toint (2000). "Trust-Region Methods".

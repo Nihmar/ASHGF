@@ -2,10 +2,11 @@
 
 ## 1. Panoramica
 
-Il porting converte l'intero ecosistema ASHGF da Python 3.10+ a Rust stabile
-(edizione 2021).  L'architettura ricalca la struttura modulare del progetto
-originale, sfruttando i tratti (`trait`) al posto dell'ereditarietà e
-`ndarray` come sostituto di NumPy.
+Il porting converte l'implementazione Python di riferimento (`ashgf/`) a Rust stabile
+(edizione 2021).  L'architettura ricalca la struttura modulare di `ashgf/`,
+sfruttando i tratti (`trait`) al posto dell'ereditarietà e
+`ndarray` come sostituto di NumPy.  Il codice originale deprecato `src_old/`
+non è stato usato come riferimento per il porting.
 
 **Obiettivi**:
 - Fedeltà matematica completa (inclusa correzione del fattore `√2` nella

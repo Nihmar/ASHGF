@@ -2,11 +2,16 @@
 
 ## 📌 Panoramica
 
-Questo report analizza il codice nella cartella `src_old/` e la tesi nella cartella `thesis/`, identificando:
-1. **Problemi di programmazione** (struttura, qualità, bottleneck)
-2. **Problemi matematici** (traduzione teoria → codice)
+> ⚠️ **Nota**: questo report analizza il codice **originale e deprecato** nella cartella `src_old/`.
+> L'implementazione Python di riferimento corrente è nella cartella `ashgf/`.
+> Il report è conservato come documentazione storica dei problemi riscontrati e risolti.
+
+Questo report analizza il codice originale nella cartella `src_old/` (deprecata) e la tesi
+nella cartella `thesis/`, identificando:
+1. **Problemi di programmazione** (struttura, qualità, bottleneck) — tutti risolti in `ashgf/`
+2. **Problemi matematici** (traduzione teoria → codice) — tutti corretti in `ashgf/` e `src/`
 3. **Test non più validi**
-4. **Piano di miglioramento e suite di test**
+4. **Piano di miglioramento e suite di test** — implementato in `ashgf/` e `src/`
 
 ---
 
@@ -641,6 +646,10 @@ jobs:
 ---
 
 ## 7. VERIFICA INCROCIATA TESI ↔ CODICE
+
+> **Nota**: la verifica qui sotto è stata condotta sul codice originale `src_old/` (deprecato).
+> Tutti i problemi identificati sono stati corretti nell'implementazione di riferimento `ashgf/`
+> e nella reimplementazione Rust `src/`.
 
 ### 7.1 Parametri di ASHGF
 
