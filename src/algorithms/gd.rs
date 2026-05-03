@@ -10,6 +10,7 @@ use crate::utils::SeededRng;
 pub struct GD {
     pub lr: f64,
     pub sigma: f64,
+    pub n_jobs: usize,
     eps: f64,
 }
 
@@ -17,7 +18,12 @@ impl GD {
     pub fn new(lr: f64, sigma: f64, eps: f64) -> Self {
         assert!(lr > 0.0);
         assert!(sigma > 0.0);
-        Self { lr, sigma, eps }
+        Self {
+            lr,
+            sigma,
+            n_jobs: 0,
+            eps,
+        }
     }
 }
 
@@ -39,7 +45,12 @@ impl Optimizer for GD {
     ) -> Array1<f64> {
         let dim = x.len();
         let directions = compute_directions(dim, rng);
-        gaussian_smoothing(x, f, self.sigma, &directions, 1)
+        let n_jobs = if self.n_jobs > 0 {
+            self.n_jobs
+        } else {
+            rayon::current_num_threads()
+        };
+        gaussian_smoothing(x, f, self.sigma, &directions, n_jobs)
     }
 }
 

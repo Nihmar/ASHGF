@@ -84,7 +84,7 @@ where
     F: Fn(&Array1<f64>) -> f64 + Sync + ?Sized,
 {
     let m = directions.nrows();
-    let dim = x.len();
+    let _dim = x.len();
 
     let sigma_dirs = directions.mapv(|v| sigma * v);
 
@@ -154,6 +154,7 @@ pub fn gauss_hermite_derivative<F>(
     basis: &Array2<f64>,
     m: usize,
     value_at_x: Option<f64>,
+    n_jobs: usize,
 ) -> (Array1<f64>, Array2<f64>, Array1<f64>, Array1<f64>)
 where
     F: Fn(&Array1<f64>) -> f64 + Sync + ?Sized,
@@ -170,8 +171,6 @@ where
 
     // ---- Build all non-central perturbed points ----
     let sigma_nodes = sigma * &p_nodes;
-    // points per direction: dim × (m-1) total
-    let k_mask: Vec<bool> = (0..m).map(|k| k != mid).collect();
     let n_perturbed = dim * (m - 1);
 
     let mut points: Vec<Array1<f64>> = Vec::with_capacity(n_perturbed);
@@ -185,7 +184,7 @@ where
         }
     }
 
-    let flat_results = parallel_eval(f, &points, 1);
+    let flat_results = parallel_eval(f, &points, n_jobs);
 
     // ---- Build evaluation matrix: (d, m) ----
     let mut evals_matrix = Array2::<f64>::zeros((dim, m));
@@ -258,7 +257,6 @@ pub fn estimate_lipschitz_constants(
     }
 
     // Vectorised over directions and pairs
-    use ndarray::s;
     let mut lipschitz = Array1::<f64>::zeros(_d);
     for d_idx in 0.._d {
         let evals_row = evaluations.row(d_idx);
@@ -315,7 +313,7 @@ mod tests {
         let x = Array1::from_vec(vec![1.0, 2.0, 3.0]);
         let mut rng = SeededRng::new(42);
         let basis = random_orthogonal(3, &mut rng);
-        let (grad, _, _, derivs) = gauss_hermite_derivative(&x, &sphere, 0.1, &basis, 5, None);
+        let (grad, _, _, _derivs) = gauss_hermite_derivative(&x, &sphere, 0.1, &basis, 5, None, 1);
         let expected = 2.0 * &x;
         // GH should be more accurate than finite diff
         for i in 0..3 {
@@ -328,7 +326,7 @@ mod tests {
         let x = Array1::zeros(3);
         let mut rng = SeededRng::new(42);
         let basis = random_orthogonal(3, &mut rng);
-        let (_, evals, nodes, _) = gauss_hermite_derivative(&x, &sphere, 0.1, &basis, 5, None);
+        let (_, evals, nodes, _) = gauss_hermite_derivative(&x, &sphere, 0.1, &basis, 5, None, 1);
         let lips = estimate_lipschitz_constants(&evals, &nodes, 0.1);
         // For sphere, Lipschitz constant ≈ 2
         for l in lips.iter() {

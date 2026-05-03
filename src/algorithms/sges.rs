@@ -4,7 +4,7 @@ use ndarray::{Array1, Array2};
 
 use crate::algorithms::base::Optimizer;
 use crate::gradient::{compute_directions, compute_directions_sges, gaussian_smoothing};
-use crate::utils::SeededRng;
+use crate::utils::{parallel_eval, SeededRng};
 
 /// Self-Guided Evolution Strategies.
 ///
@@ -33,18 +33,20 @@ pub struct SGES {
     pub delta: f64,
     /// Number of pure-random warm-up iterations.
     pub t: usize,
+    /// Number of parallel threads for function evaluation.
+    pub n_jobs: usize,
     eps: f64,
 
     // -- Adaptive state --
     /// Current alpha.
     current_alpha: f64,
     /// Gradient buffer: (t, dim).
-    G_buffer: Option<Array2<f64>>,
-    G_count: usize,
-    G_idx: usize,
+    g_buffer: Option<Array2<f64>>,
+    g_count: usize,
+    g_idx: usize,
     /// Last evaluations for alpha update.
     last_evaluations: Option<Array1<f64>>,
-    last_M: usize,
+    last_m: usize,
 }
 
 impl SGES {
@@ -71,12 +73,13 @@ impl SGES {
             delta,
             t,
             eps,
+            n_jobs: 0,
             current_alpha: alpha,
-            G_buffer: None,
-            G_count: 0,
-            G_idx: 0,
+            g_buffer: None,
+            g_count: 0,
+            g_idx: 0,
             last_evaluations: None,
-            last_M: 0,
+            last_m: 0,
         }
     }
 }
@@ -95,9 +98,9 @@ impl Optimizer for SGES {
     }
 
     fn setup(&mut self, _f: &(dyn Fn(&Array1<f64>) -> f64 + Sync), dim: usize, _x: &Array1<f64>) {
-        self.G_buffer = Some(Array2::zeros((self.t, dim)));
-        self.G_count = 0;
-        self.G_idx = 0;
+        self.g_buffer = Some(Array2::zeros((self.t, dim)));
+        self.g_count = 0;
+        self.g_idx = 0;
         self.current_alpha = self.alpha_init;
     }
 
@@ -116,9 +119,9 @@ impl Optimizer for SGES {
             Some(ev) => ev,
             None => return,
         };
-        let M = self.last_M;
+        let m_val = self.last_m;
 
-        if M == 0 || M >= evaluations.len() / 2 {
+        if m_val == 0 || m_val >= evaluations.len() / 2 {
             return;
         }
 
@@ -131,8 +134,8 @@ impl Optimizer for SGES {
             min_per_dir[i] = a.min(b);
         }
 
-        let r = min_per_dir.slice(ndarray::s![..M]).mean().unwrap();
-        let r_hat = min_per_dir.slice(ndarray::s![M..]).mean().unwrap();
+        let r = min_per_dir.slice(ndarray::s![..m_val]).mean().unwrap();
+        let r_hat = min_per_dir.slice(ndarray::s![m_val..]).mean().unwrap();
 
         // Inverted logic: alpha = probability of RANDOM direction
         if r < r_hat {
@@ -151,16 +154,21 @@ impl Optimizer for SGES {
         rng: &mut SeededRng,
     ) -> Array1<f64> {
         let dim = x.len();
+        let n_jobs = if self.n_jobs > 0 {
+            self.n_jobs
+        } else {
+            rayon::current_num_threads()
+        };
 
-        let grad = if self.G_count >= self.t - 1 {
+        let grad = if self.g_count >= self.t - 1 {
             // Use SGES directions
-            let G = self.G_buffer.as_ref().unwrap();
-            let G_slice = G.slice(ndarray::s![..self.G_count, ..]);
-            let (directions, M) =
-                compute_directions_sges(dim, &G_slice.to_owned(), self.current_alpha, rng);
-            self.last_M = M;
+            let g = self.g_buffer.as_ref().unwrap();
+            let g_slice = g.slice(ndarray::s![..self.g_count, ..]);
+            let (directions, m_val) =
+                compute_directions_sges(dim, &g_slice.to_owned(), self.current_alpha, rng);
+            self.last_m = m_val;
 
-            // Collect evaluations
+            // Collect evaluations (parallel)
             let sigma_dirs = self.sigma * &directions;
             let mut points = Vec::with_capacity(2 * dim);
             for i in 0..dim {
@@ -168,7 +176,7 @@ impl Optimizer for SGES {
                 points.push(x + &d);
                 points.push(x - &d);
             }
-            let results: Vec<f64> = points.iter().map(|p| f(p)).collect();
+            let results = parallel_eval(f, &points, n_jobs);
             self.last_evaluations = Some(Array1::from_vec(results.clone()));
 
             // Gradient assembly
@@ -179,16 +187,16 @@ impl Optimizer for SGES {
         } else {
             // Warm-up: pure random
             let directions = compute_directions(dim, rng);
-            self.last_M = 0;
+            self.last_m = 0;
             self.last_evaluations = Some(Array1::zeros(2 * dim));
-            gaussian_smoothing(x, f, self.sigma, &directions, 1)
+            gaussian_smoothing(x, f, self.sigma, &directions, n_jobs)
         };
 
         // Update gradient buffer
-        if let Some(ref mut buf) = self.G_buffer {
-            buf.row_mut(self.G_idx).assign(&grad);
-            self.G_idx = (self.G_idx + 1) % self.t;
-            self.G_count = (self.G_count + 1).min(self.t);
+        if let Some(ref mut buf) = self.g_buffer {
+            buf.row_mut(self.g_idx).assign(&grad);
+            self.g_idx = (self.g_idx + 1) % self.t;
+            self.g_count = (self.g_count + 1).min(self.t);
         }
 
         grad

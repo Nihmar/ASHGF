@@ -7,10 +7,9 @@
 //! * SGES-style adaptive mixing of gradient-history and random directions
 //! * ASHGF-style directions (delegates to SGES)
 
-use ndarray::{Array1, Array2};
+use ndarray::Array2;
 use ndarray_linalg::cholesky::UPLO;
 use ndarray_linalg::{CholeskyInto, Norm, QR};
-use ndarray_stats::QuantileExt;
 use rand::Rng;
 use rand_distr::{Binomial, Distribution, StandardNormal};
 use std::f64;
@@ -71,17 +70,17 @@ pub fn compute_directions(dim: usize, rng: &mut SeededRng) -> Array2<f64> {
 ///     Number of directions actually sampled from the gradient subspace.
 pub fn compute_directions_sges(
     dim: usize,
-    G: &Array2<f64>,
+    g: &Array2<f64>,
     alpha: f64,
     rng: &mut SeededRng,
 ) -> (Array2<f64>, usize) {
     assert!((0.0..=1.0).contains(&alpha), "alpha must be in [0,1]");
 
     // Empirical covariance of gradient buffer (column-wise)
-    // G is (T, dim) → covariance is (dim, dim)
-    let G_mean = G.mean_axis(ndarray::Axis(0)).unwrap();
-    let G_centered = G - &G_mean.insert_axis(ndarray::Axis(0));
-    let cov = G_centered.t().dot(&G_centered) / (G.nrows() as f64).max(1.0);
+    // g is (T, dim) → covariance is (dim, dim)
+    let g_mean = g.mean_axis(ndarray::Axis(0)).unwrap();
+    let g_centered = g - &g_mean.insert_axis(ndarray::Axis(0));
+    let cov = g_centered.t().dot(&g_centered) / (g.nrows() as f64).max(1.0);
 
     // Add Tikhonov regularisation
     let eye = Array2::<f64>::eye(dim);
@@ -143,12 +142,12 @@ pub fn compute_directions_sges(
 /// Generate directions for ASHGF (currently delegates to SGES).
 pub fn compute_directions_ashgf(
     dim: usize,
-    G: &Array2<f64>,
+    g: &Array2<f64>,
     alpha: f64,
     _m: usize,
     rng: &mut SeededRng,
 ) -> (Array2<f64>, usize) {
-    compute_directions_sges(dim, G, alpha, rng)
+    compute_directions_sges(dim, g, alpha, rng)
 }
 
 // ---------------------------------------------------------------------------
@@ -183,8 +182,8 @@ mod tests {
     #[test]
     fn compute_directions_sges_normalized() {
         let mut rng = SeededRng::new(42);
-        let G = Array2::from_shape_fn((5, 10), |_| rng.rng.sample(StandardNormal));
-        let (dirs, _) = compute_directions_sges(10, &G, 0.5, &mut rng);
+        let g = Array2::from_shape_fn((5, 10), |_| rng.rng.sample(StandardNormal));
+        let (dirs, _) = compute_directions_sges(10, &g, 0.5, &mut rng);
         for row in dirs.rows() {
             let nrm = row.dot(&row).sqrt();
             assert_abs_diff_eq!(nrm, 1.0, epsilon = 1e-10);

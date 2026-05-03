@@ -4,18 +4,26 @@
 //! Global minima are documented in the function-level doc comments.
 
 use ndarray::Array1;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::f64::consts::PI;
+use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
-// Helper — cached index array
+// Cached index array — avoids re-allocating [1..n] for every function call
 // ---------------------------------------------------------------------------
 
-/// Return `[1.0, 2.0, ..., n]` as an `Array1<f64>`, cached per `n`.
+static ARANGE_CACHE: Lazy<Mutex<HashMap<usize, Array1<f64>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 fn cached_arange(n: usize) -> Array1<f64> {
-    // Simple approach: allocate each time (fast enough for small n).
-    // A more sophisticated cache could use `once_cell::sync::Lazy` but
-    // a `HashMap<usize, Array1<f64>>` behind a `Mutex` adds contention.
-    Array1::from_iter((1..=n).map(|i| i as f64))
+    let mut cache = ARANGE_CACHE.lock().unwrap();
+    if let Some(arr) = cache.get(&n) {
+        return arr.clone();
+    }
+    let arr = Array1::from_iter((1..=n).map(|i| i as f64));
+    cache.insert(n, arr.clone());
+    arr
 }
 
 // ---------------------------------------------------------------------------
@@ -45,8 +53,14 @@ pub fn ackley(x: &Array1<f64>) -> f64 {
     let c: f64 = 2.0 * PI;
     let n = x.len() as f64;
 
-    let term1 = -a * (-b * (x.mapv(|v| v.powi(2)).mean().unwrap()).sqrt()).exp();
-    let term2 = -((c * x).mapv(|v| v.cos()).mean().unwrap()).exp();
+    // Single pass: accumulate squares and cosine sums
+    let (sum_sq, sum_cos): (f64, f64) = x
+        .iter()
+        .map(|&v| (v * v, (c * v).cos()))
+        .fold((0.0, 0.0), |(s1, s2), (sq, cs)| (s1 + sq, s2 + cs));
+
+    let term1 = -a * (-b * (sum_sq / n).sqrt()).exp();
+    let term2 = -(sum_cos / n).exp();
     let term3 = a + std::f64::consts::E;
 
     term1 + term2 + term3

@@ -1,13 +1,25 @@
 //! Extended optimisation test functions (pairwise / chain variants).
 
 use ndarray::Array1;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
 
+static ARANGE_CACHE: Lazy<Mutex<HashMap<usize, Array1<f64>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 fn cached_arange(n: usize) -> Array1<f64> {
-    Array1::from_iter((1..=n).map(|i| i as f64))
+    let mut cache = ARANGE_CACHE.lock().unwrap();
+    if let Some(arr) = cache.get(&n) {
+        return arr.clone();
+    }
+    let arr = Array1::from_iter((1..=n).map(|i| i as f64));
+    cache.insert(n, arr.clone());
+    arr
 }
 
 // ---------------------------------------------------------------------------
@@ -36,14 +48,22 @@ pub fn extended_feudenstein_and_roth(x: &Array1<f64>) -> f64 {
 
 pub fn extended_trigonometric(x: &Array1<f64>) -> f64 {
     let n = x.len();
-    let cos_x = x.mapv(|v| v.cos());
     let indices = cached_arange(n);
 
-    let term1 = n as f64 - cos_x.sum();
-    let term2 = &indices * &(1.0 - &cos_x);
-    let term3 = x.mapv(|v| v.sin());
+    // Compute sum of cosines once, then build residuals in one pass
+    let sum_cos: f64 = x.iter().map(|&v| v.cos()).sum();
+    let term1 = n as f64 - sum_cos;
 
-    (&term2 + &term3 + term1).mapv(|v| v.powi(2)).sum()
+    let mut total = 0.0;
+    for i in 0..n {
+        let xi = x[i];
+        let cos_xi = xi.cos();
+        let sin_xi = xi.sin();
+        let t2 = indices[i] * (1.0 - cos_xi);
+        let residual = t2 + sin_xi + term1;
+        total += residual * residual;
+    }
+    total
 }
 
 // ---------------------------------------------------------------------------

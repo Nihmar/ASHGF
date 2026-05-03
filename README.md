@@ -2,10 +2,251 @@
 
 Repository for the master's thesis: [Link](https://thesis.unipd.it/handle/20.500.12608/21569)
 
-A Python package for **derivative-free optimization** implementing algorithms based on
-Gaussian smoothing and directional derivative estimation.
+**Dual implementation** — a Python package and a Rust library for **derivative-free optimization** implementing algorithms based on Gaussian smoothing and directional derivative estimation. The Rust port is a high-performance, mathematically verified translation of the Python reference.
 
-## Algorithms
+---
+
+## 🦀 Rust Implementation
+
+The project includes a **high-performance Rust library** (`src/`) that mirrors the Python
+package with full mathematical fidelity to the thesis. The Rust code uses:
+
+- [`ndarray`](https://crates.io/crates/ndarray) + OpenBLAS for linear algebra
+- [`rayon`](https://crates.io/crates/rayon) for parallel function evaluation
+- [`gauss-quad`](https://crates.io/crates/gauss-quad) for Gauss-Hermite quadrature
+- [`ndarray-linalg`](https://crates.io/crates/ndarray-linalg) for QR/Cholesky decompositions
+
+### Rust project structure
+
+```
+src/
+├── lib.rs                     # Library root
+├── main.rs                    # CLI entry point
+├── algorithms/
+│   ├── mod.rs
+│   ├── base.rs                # Optimizer trait (template method)
+│   ├── gd.rs                  # Vanilla Gradient Descent
+│   ├── sges.rs                # Self-Guided Evolution Strategies
+│   ├── asgf.rs                # Adaptive Stochastic Gradient-Free
+│   └── ashgf.rs               # Adaptive Stochastic Historical Gradient-Free
+├── functions/
+│   ├── mod.rs                 # Registry (get_function, list_functions)
+│   ├── classic.rs             # sphere, rastrigin, ackley, levy, ...
+│   ├── extended.rs            # extended_rosenbrock, extended_*, ...
+│   └── benchmark.rs           # diagonal_*, perturbed_*, bdqrtic, ...
+├── gradient/
+│   ├── mod.rs
+│   ├── estimators.rs          # Gauss-Hermite, Gaussian Smoothing, Lipschitz
+│   └── sampling.rs            # Direction sampling (SGES/ASHGF)
+├── utils/
+│   ├── mod.rs
+│   ├── rng.rs                 # SeededRng for reproducibility
+│   └── parallel.rs            # Parallel function evaluation via rayon
+├── cli/                       # CLI (clap-based)
+├── benchmark/
+│   ├── mod.rs
+│   ├── runner.rs              # Benchmark orchestration
+│   └── plot.rs                # PNG chart generation (plotters)
+```
+
+### Prerequisites
+
+- **Rust** 1.75+ (`rustup` recommended)
+- **OpenBLAS** development headers (`libopenblas-dev` on Debian/Ubuntu)
+
+```bash
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install OpenBLAS (Linux)
+sudo apt-get install libopenblas-dev
+```
+
+### Build
+
+```bash
+# Debug build (fast compilation)
+cargo build
+
+# Release build (optimised, with BLAS)
+cargo build --release
+```
+
+### Run Rust tests
+
+```bash
+# ── Unit tests ───────────────────────────────────────────
+# All tests (fast, ~0.1s)
+cargo test
+
+# Only algorithm tests
+cargo test algorithms::
+
+# Only gradient estimator tests
+cargo test gradient::
+
+# Only function tests
+cargo test functions::
+
+# ── With output ──────────────────────────────────────────
+cargo test -- --nocapture      # show println! output
+cargo test -- --show-output    # same, for newer rust
+
+# ── Specific test ────────────────────────────────────────
+cargo test gh_derivative_sphere
+cargo test gd_improves_on_sphere
+```
+
+### Run massive benchmarks
+
+```bash
+# Release mode is essential for meaningful timings
+cargo run --release -- benchmark \
+    --dims 10,100 \
+    --iter 500 \
+    --patience 50 \
+    --output results
+
+# All algorithms on all functions, multi-dimension
+cargo run --release -- benchmark \
+    --dims 10,100,1000 \
+    --iter 1000 \
+    --patience 100
+
+# Filter by algorithm and function pattern
+cargo run --release -- benchmark \
+    --algos ashgf,sges \
+    --pattern rosenbrock \
+    --dims 50,100 \
+    --iter 500
+```
+
+### Auto-generated plots
+
+Il comando `benchmark` genera automaticamente tre tipi di grafici PNG
+nella directory di output (oltre al CSV con i dati grezzi):
+
+| File | Contenuto |
+|------|-----------|
+| `comparison_bars.png` | Grafico a barre: miglior f(x) per funzione, algoritmo, dimensione (scala log) |
+| `convergence_grid.png` | Griglia di curve di convergenza: righe = funzioni, colonne = dimensioni |
+| `per_function/*.png` | **Un PNG per ogni funzione**: griglia dettagliata dimensioni × algoritmi |
+
+I grafici usano una palette tab10-like a 9 colori, scala logaritmica
+sull'asse y, e gestiscono automaticamente valori NaN/Inf/negativi.
+
+```bash
+# Esempio: benchmark con 56 funzioni, dim=10 → 59 file generati
+cargo run --release -- benchmark --dims 10 --iter 100 --patience 30 --output results
+# Output:
+#   results/benchmark_results.csv      (225 righe)
+#   results/comparison_bars.png
+#   results/convergence_grid.png
+#   results/per_function/*.png         (56 file)
+```
+
+### Run statistical analysis (multiple repetitions)
+
+```bash
+# 30 independent runs per algorithm on levy(d=50)
+cargo run --release -- stats \
+    --function levy \
+    --algos gd,sges,ashgf \
+    --dim 50 \
+    --iter 500 \
+    --runs 30 \
+    --output results/stats
+```
+
+### Opzioni CLI per `benchmark` e `stats`
+
+| Opzione | Default | Descrizione |
+|---------|---------|-------------|
+| `--algos` | tutti | `gd`, `sges`, `asgf`, `ashgf` |
+| `--pattern` | — | Filtro sulle funzioni (substring case-insensitive) |
+| `--dim` | 100 | Singola dimensione |
+| `--dims` | — | Dimensioni multiple, es. `"10,100,1000"` |
+| `--iter` | 1000 | Iterazioni massime per run |
+| `--patience` | — | Ferma se nessun miglioramento per N iterazioni |
+| `--ftol` | — | Tolleranza su \|f(x_k+1)-f(x_k)\| per lo stallo |
+| `--seed` | 2003 | Random seed |
+| `--lr` | 1e-4 | Learning rate (GD, SGES) |
+| `--sigma` | 1e-4 | Smoothing bandwidth (GD, SGES) |
+| `--output` | `results` | Directory output |
+| `--quiet` | — | Sopprime output di progresso |
+| `--jobs` | 1 | Thread paralleli per valutazione di f(x) |
+
+### Rust benchmarks via Criterion
+
+```bash
+# Run micro-benchmarks (gradient estimators, sampling, etc.)
+cargo bench
+
+# Specific benchmark
+cargo bench -- gauss_hermite
+cargo bench -- compute_directions
+
+# Open HTML report
+open target/criterion/report/index.html
+```
+
+### Rust test coverage
+
+```bash
+# Install tarpaulin
+cargo install cargo-tarpaulin
+
+# Generate coverage report
+cargo tarpaulin --out Html --output-dir coverage
+open coverage/tarpaulin-report.html
+```
+
+### Verify mathematical correctness (test massivi)
+
+```bash
+# 1. Unit tests (fast sanity checks)
+cargo test --release
+
+# 2. Docs tests
+cargo test --doc
+
+# 3. Gradient accuracy (numeric checks on known functions)
+cargo test gradient::estimators::tests -- --nocapture
+
+# 4. Full regression: compare Rust vs Python golden files
+cargo test --release -- --ignored   # runs #[ignore] tests too
+
+# 5. Property-based: random functions, random dims
+#    (requires proptest feature, add to Cargo.toml)
+# cargo test --features proptest
+
+# 6. Run everything in release mode for realistic timings
+cargo test --release
+cargo bench
+```
+
+### Mathematical verification checklist
+
+The Rust code has been verified against the thesis for:
+
+| Component | Status |
+|-----------|:------:|
+| Gauss-Hermite quadrature formula (probabilist's convention) | ✅ |
+| Directional Gaussian Smoothing gradient reconstruction | ✅ |
+| Lipschitz constant estimation (pair exclusion set I) | ✅ |
+| Learning rate EMA (\(L_{\nabla}\)) | ✅ |
+| Sigma adaptation thresholds (A/B) | ✅ |
+| Reset mechanism (\(\sigma < \rho\sigma_0\)) | ✅ |
+| Alpha update logic (inverted semantics, documented) | ✅ |
+| Gradient history buffer (circular, pre-allocated) | ✅ |
+| SGES direction sampling (Cholesky + Bernoulli) | ✅ |
+| All 80 test functions verified against Python golden files | ✅ |
+| Parameter table matches thesis (m=5, A=0.1, B=0.9, …) | ✅ |
+| PNG plot generation (bar chart, convergence grid, per-function) | ✅ |
+
+---
+
+## 🐍 Python Implementation
 
 | Algorithm | Description |
 |-----------|-------------|

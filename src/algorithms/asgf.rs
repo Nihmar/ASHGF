@@ -34,6 +34,8 @@ pub struct ASGF {
     pub ro: f64,
     /// Fallback initial sigma.
     pub sigma_zero_ref: f64,
+    /// Number of parallel threads for function evaluation.
+    pub n_jobs: usize,
     eps: f64,
 
     // -- Adaptive state --
@@ -80,6 +82,7 @@ impl ASGF {
             ro,
             sigma_zero_ref: sigma_zero,
             eps,
+            n_jobs: 0,
             sigma: sigma_zero,
             sigma_zero,
             a,
@@ -206,9 +209,14 @@ impl Optimizer for ASGF {
     ) -> Array1<f64> {
         let fx = f(x);
         let basis = self.basis.as_ref().expect("basis must be set in setup");
+        let n_jobs = if self.n_jobs > 0 {
+            self.n_jobs
+        } else {
+            rayon::current_num_threads()
+        };
 
         let (grad, evaluations, nodes, derivatives) =
-            gauss_hermite_derivative(x, f, self.sigma, basis, self.m, Some(fx));
+            gauss_hermite_derivative(x, f, self.sigma, basis, self.m, Some(fx), n_jobs);
 
         // Update Lipschitz constants
         self.lipschitz = Some(estimate_lipschitz_constants(

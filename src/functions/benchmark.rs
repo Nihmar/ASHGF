@@ -5,9 +5,21 @@
 //! tridiagonal, perturbed, indefinite, etc.).
 
 use ndarray::Array1;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+static ARANGE_CACHE: Lazy<Mutex<HashMap<usize, Array1<f64>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn cached_arange(n: usize) -> Array1<f64> {
-    Array1::from_iter((1..=n).map(|i| i as f64))
+    let mut cache = ARANGE_CACHE.lock().unwrap();
+    if let Some(arr) = cache.get(&n) {
+        return arr.clone();
+    }
+    let arr = Array1::from_iter((1..=n).map(|i| i as f64));
+    cache.insert(n, arr.clone());
+    arr
 }
 
 // ---------------------------------------------------------------------------
@@ -44,22 +56,27 @@ pub fn perturbed_quadratic_diagonal(x: &Array1<f64>) -> f64 {
 pub fn diagonal_1(x: &Array1<f64>) -> f64 {
     let n = x.len();
     let i = cached_arange(n);
-    (x.mapv(|v| v.exp()) - &i).mapv(|v| v.powi(2)).sum()
+    x.iter()
+        .zip(i.iter())
+        .map(|(&xv, &iv)| (xv.exp() - iv).powi(2))
+        .sum()
 }
 
 pub fn diagonal_2(x: &Array1<f64>) -> f64 {
     let n = x.len();
     let i = cached_arange(n);
-    (x.mapv(|v| v.sin()) - &i.mapv(|v| v / (n as f64)))
-        .mapv(|v| v.powi(2))
+    x.iter()
+        .zip(i.iter())
+        .map(|(&xv, &iv)| (xv.sin() - iv / (n as f64)).powi(2))
         .sum()
 }
 
 pub fn diagonal_3(x: &Array1<f64>) -> f64 {
     let n = x.len();
     let i = cached_arange(n);
-    (x.mapv(|v| v.exp() * v.sin()) + x.mapv(|v| v.exp() * v.cos()) - &i.mapv(|v| v.exp() * v.sin()))
-        .mapv(|v| v.powi(2))
+    x.iter()
+        .zip(i.iter())
+        .map(|(&xv, &iv)| (xv.exp() * xv.sin() + xv.exp() * xv.cos() - iv.exp() * iv.sin()).powi(2))
         .sum()
 }
 
@@ -286,7 +303,6 @@ pub fn nondia(x: &Array1<f64>) -> f64 {
 
 pub fn vardim(x: &Array1<f64>) -> f64 {
     let n = x.len();
-    let i = cached_arange(n);
     let mut total = (x[0] - 1.0).powi(2);
     for k in 1..n {
         total += (k as f64 * (x[k] - 1.0)).powi(2);

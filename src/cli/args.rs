@@ -25,13 +25,14 @@ pub enum Command {
 }
 
 /// Algorithms available via the CLI.
-#[derive(Clone, Debug, ValueEnum)]
+#[derive(Clone, Debug, PartialEq, ValueEnum)]
 #[clap(rename_all = "lower")]
 pub enum AlgoName {
     Gd,
     Sges,
     Asgf,
     Ashgf,
+    Asebo,
 }
 
 impl std::fmt::Display for AlgoName {
@@ -41,6 +42,7 @@ impl std::fmt::Display for AlgoName {
             AlgoName::Sges => write!(f, "sges"),
             AlgoName::Asgf => write!(f, "asgf"),
             AlgoName::Ashgf => write!(f, "ashgf"),
+            AlgoName::Asebo => write!(f, "asebo"),
         }
     }
 }

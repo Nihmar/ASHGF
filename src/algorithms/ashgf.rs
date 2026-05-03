@@ -7,8 +7,6 @@
 
 use ndarray::{Array1, Array2};
 use ndarray_linalg::{Norm, QR};
-use rand::Rng;
-use rand_distr::StandardNormal;
 
 use crate::algorithms::base::Optimizer;
 use crate::gradient::{
@@ -44,6 +42,8 @@ pub struct ASHGF {
     pub delta: f64,
     pub t: usize,
 
+    /// Number of parallel threads for function evaluation.
+    pub n_jobs: usize,
     eps: f64,
 
     // -- Adaptive state --
@@ -59,10 +59,10 @@ pub struct ASHGF {
 
     // -- Gradient history state --
     current_alpha: f64,
-    G_buffer: Option<Array2<f64>>,
-    G_count: usize,
-    G_idx: usize,
-    M: usize,
+    g_buffer: Option<Array2<f64>>,
+    g_count: usize,
+    g_idx: usize,
+    m_dir: usize,
     last_evaluations: Option<Array2<f64>>,
 }
 
@@ -110,6 +110,7 @@ impl ASHGF {
             alpha_init: alpha,
             delta,
             t,
+            n_jobs: 0,
             eps,
             sigma: sigma_zero,
             sigma_zero,
@@ -121,10 +122,10 @@ impl ASHGF {
             basis: None,
             last_derivatives: None,
             current_alpha: alpha,
-            G_buffer: None,
-            G_count: 0,
-            G_idx: 0,
-            M: 0,
+            g_buffer: None,
+            g_count: 0,
+            g_idx: 0,
+            m_dir: 0,
             last_evaluations: None,
         }
     }
@@ -139,9 +140,9 @@ impl ASHGF {
             Some(ev) => ev,
             None => return,
         };
-        let M = self.M;
+        let m_dir = self.m_dir;
 
-        if M == 0 || M >= dim {
+        if m_dir == 0 || m_dir >= dim {
             return;
         }
 
@@ -150,8 +151,8 @@ impl ASHGF {
             row.fold(f64::INFINITY, |a, &b| a.min(b))
         });
 
-        let r = min_per_dir.slice(ndarray::s![..M]).mean().unwrap();
-        let r_hat = min_per_dir.slice(ndarray::s![M..]).mean().unwrap();
+        let r = min_per_dir.slice(ndarray::s![..m_dir]).mean().unwrap();
+        let r_hat = min_per_dir.slice(ndarray::s![m_dir..]).mean().unwrap();
 
         if r < r_hat {
             self.current_alpha = (self.current_alpha / self.delta).max(self.k2);
@@ -191,7 +192,7 @@ impl Optimizer for ASHGF {
         self.r = self.r_init;
         self.l_nabla = 0.0;
         self.lipschitz = Some(Array1::ones(dim));
-        self.M = dim;
+        self.m_dir = dim;
 
         let seed = x
             .iter()
@@ -200,9 +201,9 @@ impl Optimizer for ASHGF {
         let mut local_rng = SeededRng::new(seed);
         self.basis = Some(random_orthogonal(dim, &mut local_rng));
 
-        self.G_buffer = Some(Array2::zeros((self.t, dim)));
-        self.G_count = 0;
-        self.G_idx = 0;
+        self.g_buffer = Some(Array2::zeros((self.t, dim)));
+        self.g_count = 0;
+        self.g_idx = 0;
         self.current_alpha = self.alpha_init;
     }
 
@@ -218,7 +219,7 @@ impl Optimizer for ASHGF {
             None => return,
         };
         let dim = grad.len();
-        let has_history = self.G_count >= self.t;
+        let has_history = self.g_count >= self.t;
 
         // 1. Alpha update
         if has_history && iteration >= self.t + 1 {
@@ -237,13 +238,13 @@ impl Optimizer for ASHGF {
             self.a = self.a_init;
             self.b = self.b_init;
             self.r -= 1;
-            self.M = dim / 2;
+            self.m_dir = dim / 2;
             return;
         }
 
         // 3. Basis update (only during warm-up; after, grad_estimator handles it)
         if !has_history {
-            self.M = dim / 2;
+            self.m_dir = dim / 2;
             let seed = grad
                 .iter()
                 .fold(0u64, |a, &v| a.wrapping_add(v.to_bits()))
@@ -279,16 +280,21 @@ impl Optimizer for ASHGF {
         let fx = f(x);
 
         // Determine basis
-        let basis = if self.G_count >= self.t {
+        let basis = if self.g_count >= self.t {
             // Use gradient history
-            let G_slice = self
-                .G_buffer
+            let g_slice = self
+                .g_buffer
                 .as_ref()
                 .unwrap()
-                .slice(ndarray::s![..self.G_count, ..]);
-            let (directions, M) =
-                compute_directions_ashgf(dim, &G_slice.to_owned(), self.current_alpha, self.M, rng);
-            self.M = M;
+                .slice(ndarray::s![..self.g_count, ..]);
+            let (directions, m_dir_val) = compute_directions_ashgf(
+                dim,
+                &g_slice.to_owned(),
+                self.current_alpha,
+                self.m_dir,
+                rng,
+            );
+            self.m_dir = m_dir_val;
             let (q, _r) = directions
                 .t()
                 .qr()
@@ -300,8 +306,13 @@ impl Optimizer for ASHGF {
         self.basis = Some(basis.clone());
 
         // Gauss-Hermite quadrature
+        let n_jobs = if self.n_jobs > 0 {
+            self.n_jobs
+        } else {
+            rayon::current_num_threads()
+        };
         let (grad, evaluations, nodes, derivatives) =
-            gauss_hermite_derivative(x, f, self.sigma, &basis, self.m, Some(fx));
+            gauss_hermite_derivative(x, f, self.sigma, &basis, self.m, Some(fx), n_jobs);
 
         // Lipschitz constants
         self.lipschitz = Some(estimate_lipschitz_constants(
@@ -310,24 +321,32 @@ impl Optimizer for ASHGF {
             self.sigma,
         ));
 
-        // L_nabla from first M directions
-        let M_eff = self.M.max(1);
-        let max_lip_M = self
-            .lipschitz
-            .as_ref()
-            .unwrap()
-            .slice(ndarray::s![..M_eff])
-            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        self.l_nabla = (1.0 - self.gamma_l) * max_lip_M + self.gamma_l * self.l_nabla;
+        // L_nabla: during warm-up use ALL Lipschitz constants (thesis requirement);
+        // after warm-up use only those from gradient-subspace directions.
+        let has_history = self.g_count >= self.t;
+        let max_lip = if has_history {
+            let m_eff = self.m_dir.max(1);
+            self.lipschitz
+                .as_ref()
+                .unwrap()
+                .slice(ndarray::s![..m_eff])
+                .fold(f64::NEG_INFINITY, |a, &b| a.max(b))
+        } else {
+            self.lipschitz
+                .as_ref()
+                .unwrap()
+                .fold(f64::NEG_INFINITY, |a, &b| a.max(b))
+        };
+        self.l_nabla = (1.0 - self.gamma_l) * max_lip + self.gamma_l * self.l_nabla;
 
         self.last_derivatives = Some(derivatives);
         self.last_evaluations = Some(evaluations);
 
         // Update gradient buffer
-        if let Some(ref mut buf) = self.G_buffer {
-            buf.row_mut(self.G_idx).assign(&grad);
-            self.G_idx = (self.G_idx + 1) % self.t;
-            self.G_count = (self.G_count + 1).min(self.t);
+        if let Some(ref mut buf) = self.g_buffer {
+            buf.row_mut(self.g_idx).assign(&grad);
+            self.g_idx = (self.g_idx + 1) % self.t;
+            self.g_count = (self.g_count + 1).min(self.t);
         }
 
         grad

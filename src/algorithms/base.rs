@@ -26,6 +26,9 @@ pub struct OptimizeOptions {
     pub ftol: Option<f64>,
     /// Print progress every `log_interval` iterations.
     pub log_interval: usize,
+    /// Number of parallel threads for function evaluation.
+    /// 0 = use rayon global default (typically number of CPU cores).
+    pub n_jobs: usize,
 }
 
 impl Default for OptimizeOptions {
@@ -36,6 +39,7 @@ impl Default for OptimizeOptions {
             patience: None,
             ftol: None,
             log_interval: 25,
+            n_jobs: 0,
         }
     }
 }
@@ -138,13 +142,12 @@ pub trait Optimizer {
         let mut actual_iter: usize = 0;
 
         for i in 1..=options.max_iter {
-            actual_iter = i;
-
             if i % options.log_interval == 0 {
+                let last_val = all_values.last().copied().unwrap_or(f64::NAN);
                 tracing::info!(
                     "iter={:5}  f(x)={:.6e}  best={:.6e}",
                     i,
-                    all_values[i - 1],
+                    last_val,
                     best_value,
                 );
             }
@@ -228,8 +231,6 @@ pub trait Optimizer {
                     .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
                 if max_step < eps {
                     tracing::info!("Converged at iteration {} (step < eps)", i);
-                    x_prev = x_new;
-                    f_prev = current_val;
                     break;
                 }
             }
@@ -240,12 +241,14 @@ pub trait Optimizer {
 
             // 5. Hook: post-iteration
             self.post_iteration(i, &x, &grad, f_prev);
+            actual_iter = i;
         }
 
+        let last_val = all_values.last().copied().unwrap_or(f64::NAN);
         tracing::info!(
             "final  f(x)={:.6e}  iter={}  best={:.6e}",
-            all_values[actual_iter],
-            actual_iter,
+            last_val,
+            all_values.len().saturating_sub(1),
             best_value,
         );
 
