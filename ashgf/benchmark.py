@@ -17,9 +17,9 @@ from typing import Any
 import numpy as np
 
 from ashgf.algorithms import (
-    ASEBO, ASGF, ASGF2A, ASGF2F, ASGF2G, ASGF2X, ASGFC, ASGFHX, ASGFM,
+    ASEBO, ASGF, ASGF2A, ASGF2F, ASGF2G, ASGF2H, ASGF2I, ASGF2J, ASGF2P, ASGF2S, ASGF2T, ASGF2X, ASGFC, ASGFHX, ASGFM,
     ASGFAQ, ASGFBW, ASGFCD, ASGFLS, ASGFLS2, ASGFLS3, ASGFLS4, ASGFLS5,
-    ASGFRS, ASGFSS, ASHGF, ASHGF2X, ASHGFNG, ASHGFS, GD, SGES,
+    ASGFRS, ASGFSS, ASHGF, ASHGF2F, ASHGF2FD, ASHGF2X, ASHGFD, ASHGFNG, ASHGFS, GD, SGES,
 )
 from ashgf.algorithms.base import BaseOptimizer
 from ashgf.functions import get_function, list_functions
@@ -82,7 +82,16 @@ ALGORITHMS: dict[str, type[BaseOptimizer]] = {
     "ASGF-2A": ASGF2A,
     "ASGF-2F": ASGF2F,
     "ASGF-2G": ASGF2G,
+    "ASGF-2H": ASGF2H,
+    "ASGF-2I": ASGF2I,
+    "ASGF-2J": ASGF2J,
+    "ASGF-2P": ASGF2P,
+    "ASGF-2S": ASGF2S,
+    "ASGF-2T": ASGF2T,
+    "ASHGF-2F": ASHGF2F,
+    "ASHGF-2FD": ASHGF2FD,
     "ASHGF-2X": ASHGF2X,
+    "ASHGF-D": ASHGFD,
     "ASGF-CD": ASGFCD,
     "ASGF-SS": ASGFSS,
     "ASGF-AQ": ASGFAQ,

@@ -12,7 +12,7 @@ from ashgf.gradient.estimators import (
     estimate_lipschitz_constants,
     gauss_hermite_derivative,
 )
-from ashgf.gradient.sampling import _random_orthogonal
+from ashgf.gradient.sampling import _random_orthogonal, _rotate_basis_householder
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +213,9 @@ class ASGF(BaseOptimizer):
         # Keep derivatives for the adaptation logic in ``_post_iteration``.
         self._last_derivatives = derivatives
 
+        # Cache f(x) so subclasses can reuse it (avoids double eval)
+        self._f_at_x = float(f_x)
+
         return grad
 
     def _post_iteration(
@@ -252,16 +255,11 @@ class ASGF(BaseOptimizer):
             self._r -= 1
             return
 
-        # -- Basis rotation ----------------------------------------------
-        # The first basis vector is aligned with the current gradient;
-        # the remaining directions are orthonormalised via QR (faster
-        # than the previous SVD-based scipy.linalg.orth).
+        # -- Basis rotation (Householder: O(d²) instead of QR O(d³)) ---
         grad_norm = float(np.linalg.norm(grad))
         if grad_norm > 1e-12:
-            M = self._rng.standard_normal((dim, dim))
-            M[0] = grad / grad_norm
-            Q, _ = np.linalg.qr(M.T)
-            self._basis = Q.T
+            grad_dir = grad / grad_norm
+            self._basis = _rotate_basis_householder(self._basis, grad_dir)
         else:
             self._basis = _random_orthogonal(dim, self._rng)
 

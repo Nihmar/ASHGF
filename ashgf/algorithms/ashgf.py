@@ -373,6 +373,9 @@ class ASHGF(BaseOptimizer):
         self._G_idx = (self._G_idx + 1) % self.t
         self._G_count = min(self._G_count + 1, self.t)
 
+        # Cache f(x) for subclasses
+        self._f_at_x = float(f_x)
+
         return grad
 
     # ------------------------------------------------------------------

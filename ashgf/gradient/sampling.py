@@ -17,6 +17,7 @@ __all__ = [
     "compute_directions_sges",
     "compute_directions_ashgf",
     "_random_orthogonal",
+    "_rotate_basis_householder",
 ]
 
 
@@ -210,3 +211,37 @@ def compute_directions_ashgf(
     """
     del M  # reserved for future per-dimension control
     return compute_directions_sges(dim, G, alpha)
+
+
+def _rotate_basis_householder(
+    basis: np.ndarray,
+    grad_direction: np.ndarray,
+) -> np.ndarray:
+    """Rotate an orthonormal basis so the first row aligns with *grad_direction*.
+
+    Uses a Householder reflection ``H = I - 2*v*v^T/(v^T*v)`` where
+    ``v = basis[0] - grad_direction``.  The whole basis is transformed
+    in O(d²) instead of the O(d³) cost of a full QR.
+
+    Parameters
+    ----------
+    basis : np.ndarray, shape (d, d)
+        Current orthonormal basis (rows = directions).
+    grad_direction : np.ndarray, shape (d,)
+        Target direction for the first basis vector (should be unit-norm).
+
+    Returns
+    -------
+    np.ndarray, shape (d, d)
+        Rotated basis.
+    """
+    b0 = basis[0]
+    v = b0 - grad_direction
+    v_norm_sq = float(np.dot(v, v))
+
+    if v_norm_sq < 1e-16:
+        return basis  # already aligned — skip rotation
+
+    vTB = basis @ v  # (d,) — dot of each row with v
+    # B_new = B - 2 * outer(vTB, v) / ||v||²
+    return basis - (2.0 / v_norm_sq) * np.outer(vTB, v)

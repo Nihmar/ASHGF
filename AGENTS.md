@@ -15,11 +15,13 @@ When in doubt, `ashgf/` is the authoritative implementation for correctness.
 ### Python
 
 ```bash
-uv sync                    # create venv + install deps (use --group dev / --group rl as needed)
-uv run pytest tests/ -v    # all tests
-uv run pytest tests/ -v -m "not slow"  # skip slow tests
-uv run python -m ashgf <command> ...   # or: uv run ashgf <command> ...
+pip install -e ".[dev]"              # editable install + test deps
+pytest tests/ -v                     # all tests (47 pass)
+pytest tests/ -v -m "not slow"       # skip slow tests
+python -m ashgf benchmark ...        # CLI entry point
 ```
+
+Python 3.10+ required; confirmed working on 3.14.
 
 ### Rust
 
@@ -28,39 +30,60 @@ cargo build --release      # always use --release for benchmarks/timings
 cargo test                  # unit tests (inline #[cfg(test)]; no separate tests/ dir)
 cargo test --release        # also run in release for realistic timing
 cargo test -- --ignored     # include #[ignore] golden-file regression tests
-cargo test --doc            # doc tests
-cargo bench                 # criterion micro-benchmarks (no benches/ dir yet)
+cargo bench                 # criterion micro-benchmarks
 ```
 
-**Prerequisite on Linux**: `libopenblas-dev` (OpenBLAS headers for `ndarray-linalg`).
+**Linux prerequisite**: `libopenblas-dev` (OpenBLAS headers for `ndarray-linalg`).
+Windows builds fail — use Python instead.
 
-## Key test commands for fast feedback
+## Key commands
 
 ```bash
-# Python: single test
-uv run pytest tests/test_algorithms.py::test_gd_converges -v
+# Single test
+pytest tests/test_algorithms.py::test_gd_converges -v
 
-# Rust: single test or module prefix
-cargo test gd_improves_on_sphere
-cargo test gradient::
-cargo test algorithms::
-cargo test functions::
+# Benchmark: thesis algorithms + ASGF-2S (the recommended algorithm)
+python -m ashgf benchmark --algos gd sges asgf ashgf asebo asgf-2s --dims "10,100" --iter 500 --patience 50 --seed 2003 --output results
+
+# Re-run only changed algorithms (existing CSVs are preserved, plots are regenerated)
+python -m ashgf benchmark --algos asgf-2s --dim 10 --iter 500 --patience 50 --seed 2003 --output results
 ```
-
-## Feature flags (Rust)
-
-- `pca` (default) — enables `ASEBO` algorithm via `smartcore`
-- `rl` — enables RL environments (not yet implemented in Rust)
 
 ## Architecture notes
 
-- Rust tests are **inline** (`#[cfg(test)] mod tests`) in each source file. There is no `tests/` directory for Rust.
-- Python tests live in `tests/` with `conftest.py` providing fixtures (seeded RNG, default dim, etc.).
-- The `Optimizer` trait / `BaseOptimizer` class uses **Template Method** pattern:
-  `optimize()` drives the loop, `grad_estimator()` is the abstract hook.
-- All algorithms share early-stopping: NaN/Inf guards, `patience` (stagnation), `eps` (step convergence), `ftol`.
-- **Seeds are always explicit** — via `SeededRng` in Rust, `np.random.default_rng(seed)` in Python. No global RNG state.
-- Parallel evaluation: `ASHGF_N_JOBS` env var (Python), `--jobs N` CLI flag (Rust benchmark).
-- The `benchmark` subcommand in both languages **auto-generates PNG plots** (bar chart, convergence grid, per-function).
-- Rust has two extra algorithms beyond Python: `ASHGFNG` (next-gen), `ASHGFS` (simplified).
-- `ashgf/` was ported directly; `src_old/` was not used for the Rust port. Bug fixes documented in README §"Bug Fixes and Mathematical Verification" are authoritative over old code.
+- **Template Method**: `BaseOptimizer.optimize()` drives the loop. Key hooks to override:
+  - `grad_estimator(x, f)` — abstract, must return estimated gradient
+  - `_compute_step(x, grad, f, maximize)` — computes `x_new`, overridable for line-search  
+  - `_before_gradient(x)` — can modify `x` before gradient estimation
+  - `_post_iteration(iteration, x, grad, f_val)` — adaptation after each step
+  - `_get_step_size()` — returns step size (default 1.0)
+  - `_setup(f, dim, x)` — called once before the loop
+- **ASGF** saves `self._f_at_x` in `grad_estimator` — subclasses can read it in `_compute_step` instead of calling `f(x)` again.
+- **ASGF's basis rotation** uses Householder reflection (`_rotate_basis_householder`, O(d²)), not QR (O(d³)). This was a performance optimization.
+- Rust tests are **inline** (`#[cfg(test)]`) in each source file — no `tests/` directory.
+- Python tests live in `tests/` with `conftest.py` providing fixtures (seeded RNG, default dim).
+- **Seeds always explicit**: `np.random.default_rng(seed)` in Python, `SeededRng` in Rust.
+- Parallel function evaluation: `ASHGF_N_JOBS` env var (Python), `--jobs N` CLI flag (Rust).
+
+## Algorithm landscape
+
+| Algorithm | Description | Status |
+|-----------|-------------|--------|
+| **ASGF-2S** | Frequency-gated 2x step + safety gate + smooth blending | **Recommended** — ~60/78 wins at dim=10,100 |
+| ASGF | Adaptive basis rotation + sigma adaptation | Baseline |
+| ASHGF | ASGF + gradient-history covariance | Worse than ASGF on ~2/3 of functions |
+| GD, SGES, ASEBO | Thesis algorithms | Outperformed by ASGF variants |
+
+The `benchmark` subcommand auto-generates PNG plots (bar chart, convergence grid, per-function).
+
+## Performance
+
+- Householder basis rotation is O(d²) — the main optimization loop bottleneck.
+- `gauss_hermite_derivative` evaluates `f` at `d × (m-1)` points per iteration (broadcast-vectorised).
+- All function implementations are vectorised NumPy — no Python loops in hot paths.
+- The `_cached_arange(n)` helper avoids repeated `np.arange` allocations across function calls.
+
+## Rust feature flags
+
+- `pca` (default) — enables `ASEBO` via `smartcore`
+- `rl` — enables RL environments (not yet implemented)
