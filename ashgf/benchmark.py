@@ -17,7 +17,8 @@ from typing import Any
 import numpy as np
 
 from ashgf.algorithms import (
-    ASEBO, ASGF, ASGFAQ, ASGFBW, ASGFCD, ASGFLS, ASGFLS2, ASGFLS3, ASGFLS4, ASGFLS5,
+    ASEBO, ASGF, ASGF2X, ASGFC, ASGFHX, ASGFM,
+    ASGFAQ, ASGFBW, ASGFCD, ASGFLS, ASGFLS2, ASGFLS3, ASGFLS4, ASGFLS5,
     ASGFRS, ASGFSS, ASHGF, ASHGFNG, ASHGFS, GD, SGES,
 )
 from ashgf.algorithms.base import BaseOptimizer
@@ -74,6 +75,10 @@ ALGORITHMS: dict[str, type[BaseOptimizer]] = {
     "ASGF-LS3": ASGFLS3,
     "ASGF-LS4": ASGFLS4,
     "ASGF-LS5": ASGFLS5,
+    "ASGF-M": ASGFM,
+    "ASGF-2X": ASGF2X,
+    "ASGF-C": ASGFC,
+    "ASGF-HX": ASGFHX,
     "ASGF-CD": ASGFCD,
     "ASGF-SS": ASGFSS,
     "ASGF-AQ": ASGFAQ,
