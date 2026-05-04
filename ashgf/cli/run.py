@@ -8,7 +8,10 @@ import os
 import sys
 
 from ashgf import __version__
-from ashgf.algorithms import ASEBO, ASGF, ASHGF, ASHGFNG, ASHGFS, GD, SGES
+from ashgf.algorithms import (
+    ASEBO, ASGF, ASGFAQ, ASGFBW, ASGFCD, ASGFLS, ASGFRS, ASGFSS,
+    ASHGF, ASHGFNG, ASHGFS, GD, SGES,
+)
 from ashgf.benchmark import (
     benchmark,
     benchmark_multi,
@@ -46,6 +49,12 @@ ALGORITHMS = {
     "asebo": ASEBO,
     "ashgf-ng": ASHGFNG,
     "ashgf-s": ASHGFS,
+    "asgf-rs": ASGFRS,
+    "asgf-ls": ASGFLS,
+    "asgf-cd": ASGFCD,
+    "asgf-ss": ASGFSS,
+    "asgf-aq": ASGFAQ,
+    "asgf-bw": ASGFBW,
 }
 
 

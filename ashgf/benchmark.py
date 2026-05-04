@@ -16,7 +16,10 @@ from typing import Any
 
 import numpy as np
 
-from ashgf.algorithms import ASEBO, ASGF, ASHGF, ASHGFNG, ASHGFS, GD, SGES
+from ashgf.algorithms import (
+    ASEBO, ASGF, ASGFAQ, ASGFBW, ASGFCD, ASGFLS, ASGFRS, ASGFSS,
+    ASHGF, ASHGFNG, ASHGFS, GD, SGES,
+)
 from ashgf.algorithms.base import BaseOptimizer
 from ashgf.functions import get_function, list_functions
 
@@ -65,6 +68,12 @@ ALGORITHMS: dict[str, type[BaseOptimizer]] = {
     "ASEBO": ASEBO,
     "ASHGF-NG": ASHGFNG,
     "ASHGF-S": ASHGFS,
+    "ASGF-RS": ASGFRS,
+    "ASGF-LS": ASGFLS,
+    "ASGF-CD": ASGFCD,
+    "ASGF-SS": ASGFSS,
+    "ASGF-AQ": ASGFAQ,
+    "ASGF-BW": ASGFBW,
 }
 
 DEFAULT_LR = 1e-4

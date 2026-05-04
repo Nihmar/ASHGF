@@ -136,6 +136,7 @@ class BaseOptimizer(ABC):
                     )
 
                 # 1. Estimate gradient
+                x = self._before_gradient(x)
                 grad = self.grad_estimator(x, f)
 
                 # Guard against NaN/inf in gradient
@@ -145,19 +146,13 @@ class BaseOptimizer(ABC):
                     )
                     break
 
-                # 2. Update x
-                step_size = self._get_step_size()
-                if maximize:
-                    x_new = x + step_size * grad
-                else:
-                    x_new = x - step_size * grad
+                # 2. Update x (with hook for line-search variants)
+                x_new, current_val = self._compute_step(x, grad, f, maximize)
 
                 # Guard against NaN/inf in x
                 if not np.all(np.isfinite(x_new)):
                     logger.warning("iter=%d: x contains NaN/inf — terminating", i)
                     break
-
-                current_val = f(x_new)
 
                 # Guard against NaN/inf in function value
                 if not np.isfinite(current_val):
@@ -258,3 +253,29 @@ class BaseOptimizer(ABC):
     ) -> None:
         """Hook called after each iteration. Override for adaptive logic."""
         pass
+
+    def _before_gradient(self, x: np.ndarray) -> np.ndarray:
+        """Hook called before gradient estimation. May return a modified x.
+
+        Override to implement restart-from-best-point or look-ahead.
+        """
+        return x
+
+    def _compute_step(
+        self,
+        x: np.ndarray,
+        grad: np.ndarray,
+        f: Callable[[np.ndarray], float],
+        maximize: bool,
+    ) -> tuple[np.ndarray, float]:
+        """Compute the next point and its function value.
+
+        Override to implement line-search or trust-region step selection.
+        Default: ``x_new = x ± step_size * grad``.
+        """
+        step_size = self._get_step_size()
+        if maximize:
+            x_new = x + step_size * grad
+        else:
+            x_new = x - step_size * grad
+        return x_new, f(x_new)
