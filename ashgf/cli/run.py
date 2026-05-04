@@ -9,9 +9,9 @@ import sys
 
 from ashgf import __version__
 from ashgf.algorithms import (
-    ASEBO, ASGF, ASGF2X, ASGFC, ASGFHX, ASGFM,
+    ASEBO, ASGF, ASGF2A, ASGF2F, ASGF2G, ASGF2X, ASGFC, ASGFHX, ASGFM,
     ASGFAQ, ASGFBW, ASGFCD, ASGFLS, ASGFLS2, ASGFLS3, ASGFLS4, ASGFLS5,
-    ASGFRS, ASGFSS, ASHGF, ASHGFNG, ASHGFS, GD, SGES,
+    ASGFRS, ASGFSS, ASHGF, ASHGF2X, ASHGFNG, ASHGFS, GD, SGES,
 )
 from ashgf.benchmark import (
     benchmark,
@@ -59,7 +59,11 @@ ALGORITHMS = {
     "asgf-m": ASGFM,
     "asgf-2x": ASGF2X,
     "asgf-c": ASGFC,
+    "asgf-2a": ASGF2A,
+    "asgf-2f": ASGF2F,
+    "asgf-2g": ASGF2G,
     "asgf-hx": ASGFHX,
+    "ashgf-2x": ASHGF2X,
     "asgf-cd": ASGFCD,
     "asgf-ss": ASGFSS,
     "asgf-aq": ASGFAQ,
