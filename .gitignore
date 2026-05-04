@@ -216,3 +216,5 @@ convergence_grid.png
 # Added by cargo
 
 /target
+
+/results_variants
