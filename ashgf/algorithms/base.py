@@ -131,7 +131,7 @@ class BaseOptimizer(ABC):
                     logger.info(
                         "iter=%5d  f(x)=%.6e  best=%.6e",
                         i,
-                        steps[i - 1][1],
+                        f_prev,
                         best_value,
                     )
 

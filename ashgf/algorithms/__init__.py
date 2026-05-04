@@ -6,6 +6,10 @@ from ashgf.algorithms.asgf_aq import ASGFAQ
 from ashgf.algorithms.asgf_bw import ASGFBW
 from ashgf.algorithms.asgf_cd import ASGFCD
 from ashgf.algorithms.asgf_ls import ASGFLS
+from ashgf.algorithms.asgf_ls2 import ASGFLS2
+from ashgf.algorithms.asgf_ls3 import ASGFLS3
+from ashgf.algorithms.asgf_ls4 import ASGFLS4
+from ashgf.algorithms.asgf_ls5 import ASGFLS5
 from ashgf.algorithms.asgf_rs import ASGFRS
 from ashgf.algorithms.asgf_ss import ASGFSS
 from ashgf.algorithms.ashgf import ASHGF
@@ -19,5 +23,6 @@ __all__ = [
     "BaseOptimizer", "GD", "SGES",
     "ASGF", "ASHGF", "ASEBO",
     "ASHGFNG", "ASHGFS",
-    "ASGFRS", "ASGFLS", "ASGFCD", "ASGFSS", "ASGFAQ", "ASGFBW",
+    "ASGFRS", "ASGFLS", "ASGFLS2", "ASGFLS3", "ASGFLS4", "ASGFLS5",
+    "ASGFCD", "ASGFSS", "ASGFAQ", "ASGFBW",
 ]
