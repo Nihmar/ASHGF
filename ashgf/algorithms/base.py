@@ -52,6 +52,7 @@ class BaseOptimizer(ABC):
         maximize: bool = False,
         patience: int | None = None,
         ftol: float | None = None,
+        progress_cb: Callable[[int, float], None] | None = None,
     ) -> tuple[list[tuple[np.ndarray, float]], list[float]]:
         """Run the optimization loop.
 
@@ -79,6 +80,8 @@ class BaseOptimizer(ABC):
             If set, stop when ``|f(x_{k+1}) - f(x_k)| < ftol`` for
             ``patience`` consecutive iterations (requires ``patience``
             to also be set).
+        progress_cb : callable or None
+            If provided, called at each iteration with ``(iteration, f_val)``.
 
         Returns
         -------
@@ -161,6 +164,10 @@ class BaseOptimizer(ABC):
                     break
 
                 all_values_arr[i] = current_val
+
+                # Progress callback (for live progress bars in benchmark)
+                if progress_cb is not None:
+                    progress_cb(i, current_val)
 
                 # 3. Track best
                 improved = False

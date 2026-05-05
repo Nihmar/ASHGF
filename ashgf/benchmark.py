@@ -10,11 +10,20 @@ from __future__ import annotations
 import csv
 import logging
 import os
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
+from tqdm import tqdm
+
+try:
+    import colorama
+
+    colorama.init()
+except ImportError:
+    pass
 
 from ashgf.algorithms import (
     ASEBO, ASGF, ASGF2A, ASGF2F, ASGF2G, ASGF2H, ASGF2I, ASGF2J, ASGF2P, ASGF2S, ASGF2SA, ASGF2SM, ASGF2SMA, ASGF2SMC, ASGF2SMI, ASGF2SR, ASGF2SW, ASGF2T, ASGF2X, ASGFC, ASGFHX, ASGFM,
@@ -144,6 +153,7 @@ def _run_benchmark_task(
     sigma: float,
     patience: int | None,
     ftol: float | None,
+    progress_cb: Callable[[int, float], None] | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     """Run a single (algorithm, function) pair — picklable for ProcessPoolExecutor."""
     f = get_function(func_name)
@@ -157,6 +167,7 @@ def _run_benchmark_task(
             debug=False,
             patience=patience,
             ftol=ftol,
+            progress_cb=progress_cb,
         )
         elapsed = time.perf_counter() - t_start
         result = {
@@ -250,7 +261,16 @@ def benchmark(
     ]
 
     if n_jobs > 1:
-        # Parallel execution via ProcessPoolExecutor
+        # Parallel execution with global progress bar
+        total_tasks = len(tasks)
+        pbar = tqdm(
+            total=total_tasks,
+            desc="Benchmark",
+            bar_format="{desc} {percentage:3.0f}%|{bar:40}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}",
+            disable=not debug,
+            leave=True,
+            file=sys.stdout,
+        )
         with ProcessPoolExecutor(max_workers=n_jobs) as executor:
             futures = {
                 executor.submit(_run_benchmark_task, *task): task[:2] for task in tasks
@@ -259,6 +279,8 @@ def benchmark(
                 algo_name, func_name = futures[fut]
                 try:
                     a_name, f_name, result = fut.result()
+                    pbar.update(1)
+                    pbar.set_postfix_str(f"{f_name} d={dim}")
                     if debug:
                         logger.info(
                             "Benchmark %-6s on %-35s dim=%-4d max_iter=%d (elapsed=%.2fs)",
@@ -270,6 +292,7 @@ def benchmark(
                         )
                     results[a_name][f_name] = result
                 except Exception as e:
+                    pbar.update(1)
                     logger.error(
                         "Benchmark %-6s on %-35s FAILED: %s",
                         algo_name,
@@ -284,12 +307,30 @@ def benchmark(
                         "elapsed": 0.0,
                         "error": str(e),
                     }
+        pbar.close()
     else:
-        # Sequential execution (original behaviour)
+        # Sequential execution with live per-task progress bars (matching Rust style)
         for algo_name, func_name, _, _, _, _, _, _, _ in tasks:
-            a_name, f_name, result = _run_benchmark_task(
-                algo_name, func_name, dim, max_iter, seed, lr, sigma, patience, ftol
-            )
+            desc = f"dim={dim:<4} {func_name:<25} {algo_name:<10}"
+            with tqdm(
+                total=max_iter,
+                desc=desc,
+                bar_format="{desc} {percentage:3.0f}%|{bar:40}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}",
+                disable=not debug,
+                leave=False,
+                file=sys.stdout,
+            ) as pbar:
+
+                pb_ref = pbar  # capture for closure
+
+                def _cb(iteration: int, fval: float) -> None:
+                    pb_ref.update(1)
+                    pb_ref.set_postfix_str(f"f={fval:.4e}")
+
+                a_name, f_name, result = _run_benchmark_task(
+                    algo_name, func_name, dim, max_iter, seed, lr, sigma, patience, ftol,
+                    progress_cb=_cb,
+                )
             if debug:
                 logger.info(
                     "Benchmark %-6s on %-35s dim=%-4d max_iter=%d (elapsed=%.2fs)",
@@ -321,30 +362,28 @@ def benchmark(
 def print_benchmark_summary(
     results: dict[str, dict[str, dict[str, Any]]],
 ) -> None:
-    """Print a summary table of benchmark results."""
+    """Print a summary table of benchmark results (Rust-style flat format)."""
     algorithms = sorted(results.keys())
 
-    # Gather all function names
-    func_names: set[str] = set()
+    rows: list[tuple[str, str, float, float, int]] = []
     for algo in algorithms:
-        func_names.update(results[algo].keys())
-    func_names_sorted = sorted(func_names)
-
-    # Header
-    header = f"{'Function':<40}" + "".join(f"{a:>14}" for a in algorithms)
-    print(header)
-    print("-" * len(header))
-
-    for fn in func_names_sorted:
-        row = f"{fn:<40}"
-        for algo in algorithms:
-            entry = results[algo].get(fn, {})
+        for fn, entry in sorted(results[algo].items()):
             best = entry.get("best", float("nan"))
-            if np.isfinite(best):
-                row += f"{best:>14.6e}"
-            else:
-                row += f"{'FAIL':>14}"
-        print(row)
+            final = entry.get("final", float("nan"))
+            iters = entry.get("iterations", 0)
+            rows.append((algo, fn, final, best, iters))
+
+    rows.sort(key=lambda r: (r[1], r[3] if np.isfinite(r[3]) else float("inf")))
+
+    header = f"{'ALGO':<8} {'FUNCTION':<35} {'FINAL':>14} {'BEST':>14} {'ITER':>6}"
+    print()
+    print(header)
+    print("-" * 80)
+
+    for algo, func, final, best, iters in rows:
+        f_str = f"{final:>14.6e}" if np.isfinite(final) else f"{'FAIL':>14}"
+        b_str = f"{best:>14.6e}" if np.isfinite(best) else f"{'FAIL':>14}"
+        print(f"{algo:<8} {func:<35} {f_str} {b_str} {iters:>6}")
 
 
 # ---------------------------------------------------------------------------
@@ -751,6 +790,215 @@ def print_benchmark_multi_summary(
         print(f"  Dimension: {dim}")
         print(f"{'=' * 80}")
         print_benchmark_summary(results[dim])
+
+
+# ---------------------------------------------------------------------------
+# Report generation (REPORT.md)
+# ---------------------------------------------------------------------------
+
+
+def _compute_wins(flat: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    """Compute per-algorithm wins: lowest best_value on each (dim, func)."""
+    from collections import defaultdict
+
+    groups: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
+    for r in flat:
+        groups[(r["dim"], r["func"])].append(r)
+
+    win_counts: dict[str, int] = defaultdict(int)
+    for (_dim, _func), entries in groups.items():
+        valid = [(e["algo"], e["best"]) for e in entries if np.isfinite(e["best"])]
+        if not valid:
+            continue
+        best = min(v for _a, v in valid)
+        for algo, val in valid:
+            if abs(val - best) < 1e-12:
+                win_counts[algo] += 1
+
+    return sorted(win_counts.items(), key=lambda x: (-x[1], x[0]))
+
+
+def _convergence_stats(
+    flat: list[dict[str, Any]],
+) -> dict[str, tuple[int, int]]:
+    """Compute (converged, total) per algorithm."""
+    from collections import defaultdict
+
+    stats: dict[str, tuple[int, int]] = defaultdict(lambda: (0, 0))
+    for r in flat:
+        algo = r["algo"]
+        conv, total = stats[algo]
+        stats[algo] = (conv + (1 if r["converged"] else 0), total + 1)
+    return dict(stats)
+
+
+def _flatten_results(
+    results: dict[int, dict[str, dict[str, dict[str, Any]]]],
+    max_iter: int,
+) -> list[dict[str, Any]]:
+    """Flatten multi-dim benchmark results into a list of per-run dicts."""
+    flat: list[dict[str, Any]] = []
+    for dim, dim_data in results.items():
+        for algo, funcs in dim_data.items():
+            for func, entry in funcs.items():
+                iters = entry.get("iterations", 0)
+                flat.append({
+                    "dim": dim,
+                    "algo": algo,
+                    "func": func,
+                    "best": entry.get("best", float("nan")),
+                    "final": entry.get("final", float("nan")),
+                    "iters": iters,
+                    "converged": iters > 0 and iters < max_iter,
+                })
+    return flat
+
+
+def generate_report(
+    results: dict[int, dict[str, dict[str, dict[str, Any]]]],
+    seed: int,
+    max_iter: int,
+    output_dir: str,
+) -> None:
+    """Generate a Markdown benchmark report (matching Rust REPORT.md format).
+
+    Parameters
+    ----------
+    results : dict
+        Output of :func:`benchmark_multi` (or ``{dim: results}`` wrapping
+        the output of :func:`benchmark`).
+    seed : int
+        Random seed used for the benchmark.
+    max_iter : int
+        Maximum iterations per run.
+    output_dir : str
+        Directory where ``REPORT.md`` will be written.
+    """
+    import datetime
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    dims = sorted(results.keys())
+    flat = _flatten_results(results, max_iter)
+
+    if not flat:
+        logger.warning("No benchmark results to report.")
+        return
+
+    func_set = sorted({r["func"] for r in flat})
+    algo_set = sorted({r["algo"] for r in flat})
+    now = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%d %H:%M UTC"
+    )
+
+    lines: list[str] = []
+    lines.append("# Benchmark Report — ASHGF")
+    lines.append("")
+    lines.append(f"**Generated**: {now}")
+    lines.append(f"**Seed**: {seed}")
+    lines.append(f"**Max iterations**: {max_iter}")
+    lines.append(f"**Dimensions**: {', '.join(str(d) for d in dims)}")
+    lines.append(f"**Functions**: {len(func_set)}")
+    lines.append(f"**Algorithms**: {', '.join(algo_set)}")
+    lines.append("")
+
+    # --- 1. Overall Leaderboard ---
+    lines.append("## Overall Leaderboard (wins per function)")
+    lines.append("")
+    wins = _compute_wins(flat)
+    lines.append("| Algorithm | Wins | Win % |")
+    lines.append("|-----------|------|-------|")
+    total_funcs = len(func_set) * len(dims)
+    for algo, w in wins:
+        pct = w / total_funcs * 100 if total_funcs > 0 else 0.0
+        lines.append(f"| {algo} | {w} | {pct:.1f}% |")
+    lines.append("")
+
+    # --- 2. Convergence Rate ---
+    lines.append("## Convergence Rate")
+    lines.append("")
+    conv_stats = _convergence_stats(flat)
+    lines.append("| Algorithm | Converged | Total | Rate |")
+    lines.append("|-----------|-----------|-------|------|")
+    for algo in sorted(conv_stats):
+        conv, total = conv_stats[algo]
+        rate = conv / total * 100 if total > 0 else 0.0
+        lines.append(f"| {algo} | {conv} | {total} | {rate:.1f}% |")
+    lines.append("")
+
+    # --- 3. Per-dimension tables ---
+    for dim in dims:
+        dim_flat = [r for r in flat if r["dim"] == dim]
+        if not dim_flat:
+            continue
+        lines.append("---")
+        lines.append("")
+        lines.append(f"## Dimension d = {dim}")
+        lines.append("")
+
+        dim_funcs = sorted({r["func"] for r in dim_flat})
+        dim_algos = sorted({r["algo"] for r in dim_flat})
+
+        # Best-value map: (algo, func) -> best
+        best_map: dict[tuple[str, str], float] = {}
+        for r in dim_flat:
+            key = (r["algo"], r["func"])
+            val = r["best"]
+            if np.isfinite(val):
+                best_map[key] = (
+                    min(best_map[key], val) if key in best_map else val
+                )
+
+        # Header row
+        header = "| Function " + "".join(f"| {a} " for a in dim_algos) + "|"
+        lines.append(header)
+        sep = "|----------" + "|----------" * len(dim_algos) + "|"
+        lines.append(sep)
+
+        # Data rows
+        for func in dim_funcs:
+            func_bests: list[float] = []
+            cols: list[str] = []
+            for algo in dim_algos:
+                val = best_map.get((algo, func))
+                if val is not None and np.isfinite(val):
+                    func_bests.append(val)
+                else:
+                    func_bests.append(float("nan"))
+
+            best = min(func_bests) if func_bests else float("nan")
+
+            for idx, algo in enumerate(dim_algos):
+                val = best_map.get((algo, func))
+                if val is not None and np.isfinite(val):
+                    if np.isfinite(best) and abs(val - best) < 1e-12:
+                        cols.append(f"| **{val:.4e}** ")
+                    else:
+                        cols.append(f"| {val:.4e} ")
+                else:
+                    cols.append("| — ")
+
+            lines.append(f"| {func} " + "".join(cols) + "|")
+        lines.append("")
+
+        # Per-dimension wins
+        dim_wins = _compute_wins(dim_flat)
+        lines.append(f"### Wins (d={dim})")
+        lines.append("")
+        lines.append("| Algorithm | Wins |")
+        lines.append("|-----------|------|")
+        for algo, w in dim_wins:
+            lines.append(f"| {algo} | {w} |")
+        lines.append("")
+
+    # Write to file
+    report_path = os.path.join(output_dir, "REPORT.md")
+    try:
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        logger.info("REPORT.md written to %s", report_path)
+    except Exception:
+        logger.exception("Cannot write REPORT.md")
 
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ from ashgf.algorithms import (
 from ashgf.benchmark import (
     benchmark,
     benchmark_multi,
+    generate_report,
     plot_benchmark_comparison,
     plot_convergence_grid,
     plot_per_function,
@@ -417,7 +418,6 @@ def main(argv: list[str] | None = None) -> int:
                     n_jobs=args.jobs,
                 )
                 all_results[dim] = dim_results
-                print_benchmark_summary(dim_results)
 
                 wrapped = {dim: dim_results}
 
@@ -444,6 +444,9 @@ def main(argv: list[str] | None = None) -> int:
 
             # Cross-dimension summary
             print_benchmark_multi_summary(all_results)
+
+            # Generate REPORT.md
+            generate_report(all_results, args.seed, args.max_iter, output_dir)
 
             # Cross-dimension plots (only after all dims complete)
             bar_path = os.path.join(output_dir, "comparison_bars.png")
@@ -493,6 +496,9 @@ def main(argv: list[str] | None = None) -> int:
 
             # Wrap for plotting functions
             wrapped = {dim: results}
+
+            # Generate REPORT.md
+            generate_report(wrapped, args.seed, args.max_iter, output_dir)
 
             # Auto-save comparison bar chart
             bar_path = os.path.join(output_dir, "comparison_bars.png")
