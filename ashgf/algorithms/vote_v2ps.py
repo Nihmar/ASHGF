@@ -1,7 +1,7 @@
-"""ASGF-2SLV2S: 2SLV2 + spread-conditioned selection bonus.
+"""ASGF-2SLV2PS: 2SLV2 + persistence + spread bonus.
 
-Triple candidate (uniform + full-aniso + sqrt) with the spread bonus
-on tiebreaks for anisotropic and sqrt candidates.
+The full combination: triple candidate (uniform + full-aniso + sqrt)
+with trajectory persistence and spread-conditioned selection.
 """
 
 from __future__ import annotations
@@ -15,35 +15,44 @@ from ashgf.algorithms.asgf import ASGF
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASGF2SLV2S"]
+__all__ = ["VOTEV2PS"]
 
+_PERSISTENCE_ALPHA = 0.3
+_PERSISTENCE_EPS = 1e-12
 _SPREAD_EMA = 0.9
 _SPREAD_REF = 3.0
 _SPREAD_EPS = 1e-12
 
 
-class ASGF2SLV2S(ASGF):
-    kind = "ASGF2SLV2S"
+class VOTEV2PS(ASGF):
+    kind = "VOTEV2PS"
 
     def __init__(
         self, warmup: int = 3, lip_clip: float = 5.0,
+        persist_alpha: float = _PERSISTENCE_ALPHA,
+        persist_eps: float = _PERSISTENCE_EPS,
         spread_ema: float = _SPREAD_EMA, spread_ref: float = _SPREAD_REF,
-        spread_eps: float = _SPREAD_EPS, **kwargs,
+        spread_eps: float = _SPREAD_EPS,
+        **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._warmup = warmup
         self._lip_clip = lip_clip
+        self._persist_alpha = persist_alpha
+        self._persist_eps = persist_eps
         self._spread_ema = spread_ema
         self._spread_ref = spread_ref
         self._spread_eps = spread_eps
         self._improve_streak: int = 0
         self._prev_f_base: float | None = None
+        self._persistence_score: float = 0.0
         self._spread_smooth: float = 1.0
 
     def _setup(self, f, dim, x):
         super()._setup(f, dim, x)
         self._improve_streak = 0
         self._prev_f_base = None
+        self._persistence_score = 0.0
         self._spread_smooth = 1.0
 
     def _get_candidates(self, x, step_size, direction, confidence, f_base, f_cur, lipschitz, f):
@@ -70,23 +79,32 @@ class ASGF2SLV2S(ASGF):
             if np.isfinite(f_sqrt) and f_sqrt < f_base and f_sqrt < f_cur:
                 cand.append((x_sqrt, f_sqrt, "sqrt"))
 
-        if can_aniso:
             raw_spread = float(np.max(lipschitz)) / max(l_mean, 1e-12)
             self._spread_smooth = self._spread_ema * self._spread_smooth + (1.0 - self._spread_ema) * raw_spread
 
         return cand
 
+    def _spread_bonus(self):
+        if self._spread_smooth > self._spread_ref:
+            return np.log(self._spread_smooth / self._spread_ref) * self._spread_eps
+        return 0.0
+
     def _select(self, candidates):
         if len(candidates) == 1:
-            return candidates[0][0], candidates[0][1]
-
-        if self._spread_smooth > self._spread_ref:
-            bonus = np.log(self._spread_smooth / self._spread_ref) * self._spread_eps
+            chosen = candidates[0]
         else:
-            bonus = 0.0
+            persist_bias = self._persistence_score * self._persist_eps
+            s_bonus = self._spread_bonus()
+            def key(t):
+                bonus = (persist_bias + s_bonus) if t[2] != "uni" else -(persist_bias + s_bonus)
+                return t[1] + bonus
+            candidates.sort(key=key)
+            chosen = candidates[0]
 
-        candidates.sort(key=lambda t: t[1] - (bonus if t[2] != "uni" else 0.0))
-        chosen = candidates[0]
+        self._persistence_score += (
+            (1.0 if chosen[2] != "uni" else -1.0) - self._persistence_score
+        ) * self._persist_alpha
+
         return chosen[0], chosen[1]
 
     def _compute_step(self, x, grad, f, maximize):

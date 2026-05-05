@@ -11,23 +11,23 @@ from __future__ import annotations
 
 import logging
 
-from ashgf.algorithms.ashgf_2slv import ASHGF2SLV
+from ashgf.algorithms.ashgf_vote import ASHGFVOTE
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASHGF2SLVA"]
+__all__ = ["ASHGFVOTEA"]
 
 
-class ASHGF2SLVA(ASHGF2SLV):
+class ASHGFVOTEA(ASHGFVOTE):
     """ASHGF-2SLV with alpha=0 (gradient-subspace only).
 
     Parameters
     ----------
     **kwargs :
-        Passed to :class:`ASHGF2SLV`.
+        Passed to :class:`ASHGFVOTE`.
     """
 
-    kind = "ASHGF2SLVA"
+    kind = "ASHGFVOTEA"
 
     def __init__(self, **kwargs) -> None:
         kwargs.setdefault("k1", 0.0)

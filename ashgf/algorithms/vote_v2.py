@@ -1,9 +1,9 @@
-"""ASGF-2SLVS: 2SLV with spread-conditioned selection bonus.
+"""ASGF-2SLV2: 2SLV with triple candidate — uniform, full-aniso, and sqrt.
 
-When the Lipschitz spread is high (the function looks separable), the
-anisotropic candidate receives a selection bonus proportional to
-``log(spread)``, biasing the vote toward the per-direction step on
-functions where it has high potential.
+Adds a third candidate using ``confidence / sqrt(ratio)`` weighting.
+This covers the intermediate case that fixes ``extended_white_and_holst``
+while retaining the extremes.
+Cost: 3 (vs 2) extra function evaluations per confident iteration.
 """
 
 from __future__ import annotations
@@ -17,36 +17,22 @@ from ashgf.algorithms.asgf import ASGF
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASGF2SLVS"]
+__all__ = ["VOTEV2"]
 
-_SPREAD_EMA = 0.9
-_SPREAD_REF = 3.0
-_SPREAD_EPS = 1e-12
+class VOTEV2(ASGF):
+    kind = "VOTEV2"
 
-
-class ASGF2SLVS(ASGF):
-    kind = "ASGF2SLVS"
-
-    def __init__(
-        self, warmup: int = 3, lip_clip: float = 5.0,
-        spread_ema: float = _SPREAD_EMA, spread_ref: float = _SPREAD_REF,
-        spread_eps: float = _SPREAD_EPS, **kwargs,
-    ) -> None:
+    def __init__(self, warmup: int = 3, lip_clip: float = 5.0, **kwargs) -> None:
         super().__init__(**kwargs)
         self._warmup = warmup
         self._lip_clip = lip_clip
-        self._spread_ema = spread_ema
-        self._spread_ref = spread_ref
-        self._spread_eps = spread_eps
         self._improve_streak: int = 0
         self._prev_f_base: float | None = None
-        self._spread_smooth: float = 1.0
 
     def _setup(self, f, dim, x):
         super()._setup(f, dim, x)
         self._improve_streak = 0
         self._prev_f_base = None
-        self._spread_smooth = 1.0
 
     def _get_candidates(self, x, step_size, direction, confidence, f_base, f_cur, lipschitz, f):
         k = 1.0 + confidence * 1.0
@@ -63,30 +49,20 @@ class ASGF2SLVS(ASGF):
             k_aniso = confidence / ratio
             x_ani = x + (1.0 + k_aniso) * step_size * direction
             f_ani = f(x_ani)
-
-            raw_spread = float(np.max(lipschitz)) / max(l_mean, 1e-12)
-            self._spread_smooth = self._spread_ema * self._spread_smooth + (1.0 - self._spread_ema) * raw_spread
-
             if np.isfinite(f_ani) and f_ani < f_base and f_ani < f_cur:
                 cand.append((x_ani, f_ani, "aniso"))
+
+            k_sqrt = confidence / np.sqrt(ratio)
+            x_sqrt = x + (1.0 + k_sqrt) * step_size * direction
+            f_sqrt = f(x_sqrt)
+            if np.isfinite(f_sqrt) and f_sqrt < f_base and f_sqrt < f_cur:
+                cand.append((x_sqrt, f_sqrt, "sqrt"))
 
         return cand
 
     def _select(self, candidates):
-        if len(candidates) == 1:
-            return candidates[0][0], candidates[0][1]
-
-        if self._spread_smooth > self._spread_ref:
-            bonus = np.log(self._spread_smooth / self._spread_ref) * self._spread_eps
-        else:
-            bonus = 0.0
-
-        def key(t):
-            return t[1] - bonus if t[2] == "aniso" else t[1]
-
-        candidates.sort(key=lambda t: t[1] - (bonus if t[2] == "aniso" else 0.0))
-        chosen = candidates[0]
-        return chosen[0], chosen[1]
+        candidates.sort(key=lambda t: t[1])
+        return candidates[0][0], candidates[0][1]
 
     def _compute_step(self, x, grad, f, maximize):
         step_size = self._get_step_size()

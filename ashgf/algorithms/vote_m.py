@@ -14,17 +14,17 @@ from typing import Callable
 
 import numpy as np
 
-from ashgf.algorithms.asgf_2slv import ASGF2SLV
+from ashgf.algorithms.vote import VOTE
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASGF2SLVM"]
+__all__ = ["VOTEM"]
 
 _MEMORY_EPS = 1e-14
 _WINDOW = 10
 
 
-class ASGF2SLVM(ASGF2SLV):
+class VOTEM(VOTE):
     """2SLV with improvement-magnitude memory.
 
     Parameters
@@ -39,10 +39,10 @@ class ASGF2SLVM(ASGF2SLV):
         Bonus magnitude for the historically better candidate type.
         Default ``1e-14``.
     **kwargs :
-        Passed to :class:`ASGF2SLV`.
+        Passed to :class:`VOTE`.
     """
 
-    kind = "ASGF2SLVM"
+    kind = "VOTEM"
 
     def __init__(
         self,

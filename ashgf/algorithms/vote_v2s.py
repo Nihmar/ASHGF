@@ -1,10 +1,7 @@
-"""ASGF-2SLVP: 2SLV with trajectory persistence bias.
+"""ASGF-2SLV2S: 2SLV2 + spread-conditioned selection bonus.
 
-When both candidates pass the safety gate, a small bonus is given to the
-candidate type that was most frequently chosen in recent iterations.
-This prevents the algorithm from switching between strategies every
-iteration on functions where one strategy is consistently better long-term
-but sometimes loses the immediate comparison by epsilon.
+Triple candidate (uniform + full-aniso + sqrt) with the spread bonus
+on tiebreaks for anisotropic and sqrt candidates.
 """
 
 from __future__ import annotations
@@ -18,35 +15,36 @@ from ashgf.algorithms.asgf import ASGF
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASGF2SLVP"]
+__all__ = ["VOTEV2S"]
 
-_PERSISTENCE_ALPHA = 0.3
-_PERSISTENCE_EPS = 1e-12
+_SPREAD_EMA = 0.9
+_SPREAD_REF = 3.0
+_SPREAD_EPS = 1e-12
 
 
-class ASGF2SLVP(ASGF):
-    kind = "ASGF2SLVP"
+class VOTEV2S(ASGF):
+    kind = "VOTEV2S"
 
     def __init__(
         self, warmup: int = 3, lip_clip: float = 5.0,
-        persist_alpha: float = _PERSISTENCE_ALPHA,
-        persist_eps: float = _PERSISTENCE_EPS,
-        **kwargs,
+        spread_ema: float = _SPREAD_EMA, spread_ref: float = _SPREAD_REF,
+        spread_eps: float = _SPREAD_EPS, **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._warmup = warmup
         self._lip_clip = lip_clip
-        self._persist_alpha = persist_alpha
-        self._persist_eps = persist_eps
+        self._spread_ema = spread_ema
+        self._spread_ref = spread_ref
+        self._spread_eps = spread_eps
         self._improve_streak: int = 0
         self._prev_f_base: float | None = None
-        self._persistence_score: float = 0.0
+        self._spread_smooth: float = 1.0
 
     def _setup(self, f, dim, x):
         super()._setup(f, dim, x)
         self._improve_streak = 0
         self._prev_f_base = None
-        self._persistence_score = 0.0
+        self._spread_smooth = 1.0
 
     def _get_candidates(self, x, step_size, direction, confidence, f_base, f_cur, lipschitz, f):
         k = 1.0 + confidence * 1.0
@@ -66,24 +64,29 @@ class ASGF2SLVP(ASGF):
             if np.isfinite(f_ani) and f_ani < f_base and f_ani < f_cur:
                 cand.append((x_ani, f_ani, "aniso"))
 
+            k_sqrt = confidence / np.sqrt(ratio)
+            x_sqrt = x + (1.0 + k_sqrt) * step_size * direction
+            f_sqrt = f(x_sqrt)
+            if np.isfinite(f_sqrt) and f_sqrt < f_base and f_sqrt < f_cur:
+                cand.append((x_sqrt, f_sqrt, "sqrt"))
+
+        if can_aniso:
+            raw_spread = float(np.max(lipschitz)) / max(l_mean, 1e-12)
+            self._spread_smooth = self._spread_ema * self._spread_smooth + (1.0 - self._spread_ema) * raw_spread
+
         return cand
 
     def _select(self, candidates):
         if len(candidates) == 1:
-            chosen = candidates[0]
+            return candidates[0][0], candidates[0][1]
+
+        if self._spread_smooth > self._spread_ref:
+            bonus = np.log(self._spread_smooth / self._spread_ref) * self._spread_eps
         else:
-            bias = self._persistence_score * self._persist_eps
-            def key(t):
-                ttype = t[2]
-                bonus = bias if ttype == "aniso" else -bias
-                return t[1] + bonus
-            candidates.sort(key=key)
-            chosen = candidates[0]
+            bonus = 0.0
 
-        self._persistence_score += (
-            (1.0 if chosen[2] == "aniso" else -1.0) - self._persistence_score
-        ) * self._persist_alpha
-
+        candidates.sort(key=lambda t: t[1] - (bonus if t[2] != "uni" else 0.0))
+        chosen = candidates[0]
         return chosen[0], chosen[1]
 
     def _compute_step(self, x, grad, f, maximize):

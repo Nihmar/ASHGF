@@ -1,7 +1,10 @@
-"""ASGF-2SLV2P: 2SLV2 + persistence bias.
+"""ASGF-2SLVP: 2SLV with trajectory persistence bias.
 
-Triple candidate (uniform + full-aniso + sqrt) with trajectory
-persistence bias on tiebreaks.
+When both candidates pass the safety gate, a small bonus is given to the
+candidate type that was most frequently chosen in recent iterations.
+This prevents the algorithm from switching between strategies every
+iteration on functions where one strategy is consistently better long-term
+but sometimes loses the immediate comparison by epsilon.
 """
 
 from __future__ import annotations
@@ -15,14 +18,14 @@ from ashgf.algorithms.asgf import ASGF
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASGF2SLV2P"]
+__all__ = ["VOTEP"]
 
 _PERSISTENCE_ALPHA = 0.3
 _PERSISTENCE_EPS = 1e-12
 
 
-class ASGF2SLV2P(ASGF):
-    kind = "ASGF2SLV2P"
+class VOTEP(ASGF):
+    kind = "VOTEP"
 
     def __init__(
         self, warmup: int = 3, lip_clip: float = 5.0,
@@ -63,12 +66,6 @@ class ASGF2SLV2P(ASGF):
             if np.isfinite(f_ani) and f_ani < f_base and f_ani < f_cur:
                 cand.append((x_ani, f_ani, "aniso"))
 
-            k_sqrt = confidence / np.sqrt(ratio)
-            x_sqrt = x + (1.0 + k_sqrt) * step_size * direction
-            f_sqrt = f(x_sqrt)
-            if np.isfinite(f_sqrt) and f_sqrt < f_base and f_sqrt < f_cur:
-                cand.append((x_sqrt, f_sqrt, "sqrt"))
-
         return cand
 
     def _select(self, candidates):
@@ -77,13 +74,14 @@ class ASGF2SLV2P(ASGF):
         else:
             bias = self._persistence_score * self._persist_eps
             def key(t):
-                bonus = bias if t[2] != "uni" else -bias
+                ttype = t[2]
+                bonus = bias if ttype == "aniso" else -bias
                 return t[1] + bonus
             candidates.sort(key=key)
             chosen = candidates[0]
 
         self._persistence_score += (
-            (1.0 if chosen[2] != "uni" else -1.0) - self._persistence_score
+            (1.0 if chosen[2] == "aniso" else -1.0) - self._persistence_score
         ) * self._persist_alpha
 
         return chosen[0], chosen[1]

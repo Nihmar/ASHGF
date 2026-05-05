@@ -1,10 +1,9 @@
-"""ASHGF-2SLV-2GA: alternate between ASGF and ASHGF gradients.
+"""ASGF-2SLV: 2SL "vote" — evaluates both uniform and anisotropic big steps,
+picks the best one that passes the safety gate.
 
-Each iteration uses a single gradient source — ASGF (Householder basis)
-on odd iterations, ASHGF (history basis) on even iterations — and
-applies the 2SLV step vote to it.  Over N iterations the algorithm
-experiences both gradient types, but each iteration costs only one
-quadrature evaluation (vs two for the full dual-gradient).
+Cost: 2 extra function evaluations per confident iteration (vs 1 for
+2S or 2SL).  Pays off when uniform and anisotropic steps diverge —
+the algorithm cannot pick the wrong strategy if it tries both.
 """
 
 from __future__ import annotations
@@ -14,17 +13,15 @@ from typing import Callable
 
 import numpy as np
 
-from ashgf.algorithms.ashgf_2slv import ASHGF2SLV
-from ashgf.gradient.estimators import estimate_lipschitz_constants, gauss_hermite_derivative
-from ashgf.gradient.sampling import _random_orthogonal, _rotate_basis_householder
+from ashgf.algorithms.asgf import ASGF
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASHGF2SLV2GA"]
+__all__ = ["VOTE"]
 
 
-class ASHGF2SLV2GA(ASHGF2SLV):
-    """Alternating-gradient 2SLV.
+class VOTE(ASGF):
+    """Evaluates both uniform and anisotropic big steps, picks the best.
 
     Parameters
     ----------
@@ -33,10 +30,10 @@ class ASHGF2SLV2GA(ASHGF2SLV):
     lip_clip : float
         Clipping factor for the Lipschitz-to-mean ratio.  Default ``5.0``.
     **kwargs :
-        Passed to :class:`ASHGF2SLV`.
+        Passed to :class:`ASGF`.
     """
 
-    kind = "ASHGF2SLV2GA"
+    kind = "VOTE"
 
     def __init__(
         self,
@@ -44,14 +41,16 @@ class ASHGF2SLV2GA(ASHGF2SLV):
         lip_clip: float = 5.0,
         **kwargs,
     ) -> None:
-        super().__init__(warmup=warmup, lip_clip=lip_clip, **kwargs)
-        self._iter_count: int = 0
-        self._basis_asgf: np.ndarray | None = None
+        super().__init__(**kwargs)
+        self._warmup = warmup
+        self._lip_clip = lip_clip
+        self._improve_streak: int = 0
+        self._prev_f_base: float | None = None
 
     def _setup(self, f, dim, x):
         super()._setup(f, dim, x)
-        self._iter_count = 0
-        self._basis_asgf = _random_orthogonal(dim)
+        self._improve_streak = 0
+        self._prev_f_base = None
 
     def _compute_step(
         self,
@@ -60,28 +59,8 @@ class ASHGF2SLV2GA(ASHGF2SLV):
         f: Callable[[np.ndarray], float],
         maximize: bool,
     ) -> tuple[np.ndarray, float]:
-        self._iter_count += 1
         step_size = self._get_step_size()
-
-        # Alternate gradient source
-        if self._iter_count % 2 == 1:
-            # ---- ASGF-style gradient (Householder basis) ----
-            assert self._basis_asgf is not None
-            f_x = f(x)
-            grad_asgf, _, _, _ = gauss_hermite_derivative(
-                x, f, self._sigma, self._basis_asgf, self.m, f_x
-            )
-            direction = grad_asgf if maximize else -grad_asgf
-            # Update Lipschitz for the 2SLV vote
-            if self._basis_asgf is not None:
-                grad_norm = float(np.linalg.norm(grad_asgf))
-                if grad_norm > 1e-12:
-                    self._basis_asgf = _rotate_basis_householder(
-                        self._basis_asgf, grad_asgf / grad_norm
-                    )
-        else:
-            # ---- ASHGF-style gradient (from parent's grad_estimator) ----
-            direction = grad if maximize else -grad
+        direction = grad if maximize else -grad
 
         x_base = x + step_size * direction
         f_base = f(x_base)
@@ -99,6 +78,12 @@ class ASHGF2SLV2GA(ASHGF2SLV):
 
         if confidence > 0.0 and k > 1.01:
             f_cur = getattr(self, "_f_at_x", f(x))
+
+            # Stage 1: uniform big step
+            x_uni = x + k * step_size * direction
+            f_uni = f(x_uni)
+
+            # Stage 2: Lipschitz-weighted big step
             lipschitz = self._lipschitz
             can_aniso = (
                 lipschitz is not None
@@ -108,8 +93,6 @@ class ASHGF2SLV2GA(ASHGF2SLV):
 
             candidates: list[tuple[np.ndarray, float]] = []
 
-            x_uni = x + k * step_size * direction
-            f_uni = f(x_uni)
             if np.isfinite(f_uni) and f_uni < f_base and f_uni < f_cur:
                 candidates.append((x_uni, f_uni))
 

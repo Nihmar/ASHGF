@@ -1,9 +1,7 @@
-"""ASGF-2SLVK: 2SLV with vote-aware sigma decay.
+"""VOTEK-M: multi-scale sigma voting — computes gradient at both sigma
+and sigma/2, generates step candidates from both, picks the best.
 
-When the 2SLV vote accepts a big step (indicating the gradient is
-reliable), sigma decreases more aggressively, accelerating convergence.
-When no big step passes the safety gate, sigma decays normally.
-This is a zero-cost meta-signal from the vote mechanism.
+Only activates when confidence is high and Lipschitz spread > 2.0.
 """
 
 from __future__ import annotations
@@ -13,55 +11,36 @@ from typing import Callable
 
 import numpy as np
 
-from ashgf.algorithms.asgf_2slv import ASGF2SLV
+from ashgf.algorithms.vote_k import VOTEK
+from ashgf.gradient.estimators import gauss_hermite_derivative
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASGF2SLVK"]
+__all__ = ["VOTEKM"]
 
-_SIGMA_DECAY = 0.98
+_SPREAD_MIN = 2.0
+_CONFIDENCE_MIN = 0.5
 
 
-class ASGF2SLVK(ASGF2SLV):
-    """2SLV with vote-accelerated sigma decay.
-
-    Parameters
-    ----------
-    warmup : int
-        Streak length at which full boost is reached.  Default ``3``.
-    lip_clip : float
-        Clipping factor for the Lipschitz-to-mean ratio.  Default ``5.0``.
-    sigma_decay : float
-        Extra multiplier applied to sigma each time a big step is accepted.
-        Default ``0.98``.
-    **kwargs :
-        Passed to :class:`ASGF2SLV`.
-    """
-
-    kind = "ASGF2SLVK"
+class VOTEKM(VOTEK):
+    kind = "VOTEKM"
 
     def __init__(
         self,
         warmup: int = 3,
         lip_clip: float = 5.0,
-        sigma_decay: float = _SIGMA_DECAY,
+        sigma_decay: float = 0.98,
+        spread_min: float = _SPREAD_MIN,
+        confidence_min: float = _CONFIDENCE_MIN,
         **kwargs,
     ) -> None:
-        super().__init__(warmup=warmup, lip_clip=lip_clip, **kwargs)
-        self._sigma_decay = sigma_decay
-        self._big_step_accepted: bool = False
+        super().__init__(
+            warmup=warmup, lip_clip=lip_clip, sigma_decay=sigma_decay, **kwargs
+        )
+        self._spread_min = spread_min
+        self._confidence_min = confidence_min
 
-    def _setup(self, f, dim, x):
-        super()._setup(f, dim, x)
-        self._big_step_accepted = False
-
-    def _compute_step(
-        self,
-        x: np.ndarray,
-        grad: np.ndarray,
-        f: Callable[[np.ndarray], float],
-        maximize: bool,
-    ) -> tuple[np.ndarray, float]:
+    def _compute_step(self, x, grad, f, maximize):
         step_size = self._get_step_size()
         direction = grad if maximize else -grad
 
@@ -98,11 +77,37 @@ class ASGF2SLVK(ASGF2SLV):
             if can_aniso:
                 l_mean = float(np.mean(lipschitz))
                 ratio = np.clip(lipschitz / l_mean, 1e-12, self._lip_clip)
+                l_spread = float(np.max(lipschitz)) / max(l_mean, 1e-12)
+
                 k_aniso = confidence / ratio
                 x_ani = x + (1.0 + k_aniso) * step_size * direction
                 f_ani = f(x_ani)
                 if np.isfinite(f_ani) and f_ani < f_base and f_ani < f_cur:
                     candidates.append((x_ani, f_ani))
+
+                if (
+                    confidence >= self._confidence_min
+                    and l_spread > self._spread_min
+                ):
+                    sigma_half = self._sigma * 0.5
+                    basis = self._basis
+                    grad2, _, _, _ = gauss_hermite_derivative(
+                        x, f, sigma_half, basis, self.m, f_cur
+                    )
+                    dir2 = grad2 if maximize else -grad2
+                    step2 = sigma_half / max(self._L_nabla, 1e-12)
+
+                    x_uni2 = x + k * step2 * dir2
+                    f_uni2 = f(x_uni2)
+                    if np.isfinite(f_uni2) and f_uni2 < f_base and f_uni2 < f_cur:
+                        candidates.append((x_uni2, f_uni2))
+
+                    ratio2 = np.clip(lipschitz / l_mean, 1e-12, self._lip_clip)
+                    k_aniso2 = confidence / ratio2
+                    x_ani2 = x + (1.0 + k_aniso2) * step2 * dir2
+                    f_ani2 = f(x_ani2)
+                    if np.isfinite(f_ani2) and f_ani2 < f_base and f_ani2 < f_cur:
+                        candidates.append((x_ani2, f_ani2))
 
             if candidates:
                 candidates.sort(key=lambda t: t[1])
@@ -111,10 +116,3 @@ class ASGF2SLVK(ASGF2SLV):
 
         self._big_step_accepted = False
         return x_base, f_base
-
-    def _post_iteration(
-        self, iteration: int, x: np.ndarray, grad: np.ndarray, f_val: float
-    ) -> None:
-        super()._post_iteration(iteration, x, grad, f_val)
-        if self._big_step_accepted:
-            self._sigma *= self._sigma_decay

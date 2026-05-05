@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import logging
 
-from ashgf.algorithms.ashgf_2slv2g import ASHGF2SLV2G
+from ashgf.algorithms.ashgf_vote2g import ASHGFVOTE2G
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASHGF2SLV2GD"]
+__all__ = ["ASHGFVOTE2GD"]
 
 
-class ASHGF2SLV2GD(ASHGF2SLV2G):
+class ASHGFVOTE2GD(ASHGFVOTE2G):
     """Dual-gradient with exponential history decay.
 
     Parameters
@@ -25,10 +25,10 @@ class ASHGF2SLV2GD(ASHGF2SLV2G):
         Multiplier applied to the gradient buffer before each new entry.
         Default ``0.95``.
     **kwargs :
-        Passed to :class:`ASHGF2SLV2G`.
+        Passed to :class:`ASHGFVOTE2G`.
     """
 
-    kind = "ASHGF2SLV2GD"
+    kind = "ASHGFVOTE2GD"
 
     def __init__(self, history_decay: float = 0.95, **kwargs) -> None:
         super().__init__(**kwargs)

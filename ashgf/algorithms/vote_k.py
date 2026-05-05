@@ -1,8 +1,9 @@
-"""ASHGF-2SLV: ASHGF with "try both, pick best" voting.
+"""ASGF-2SLVK: 2SLV with vote-aware sigma decay.
 
-Transfers the 2SLV mechanism (evaluate both uniform and Lipschitz-weighted
-big steps, select the best passing the safety gate) to the ASHGF gradient-
-history framework.
+When the 2SLV vote accepts a big step (indicating the gradient is
+reliable), sigma decreases more aggressively, accelerating convergence.
+When no big step passes the safety gate, sigma decays normally.
+This is a zero-cost meta-signal from the vote mechanism.
 """
 
 from __future__ import annotations
@@ -12,15 +13,17 @@ from typing import Callable
 
 import numpy as np
 
-from ashgf.algorithms.ashgf import ASHGF
+from ashgf.algorithms.vote import VOTE
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASHGF2SLV"]
+__all__ = ["VOTEK"]
+
+_SIGMA_DECAY = 0.98
 
 
-class ASHGF2SLV(ASHGF):
-    """ASHGF with uniform/anisotropic step voting.
+class VOTEK(VOTE):
+    """2SLV with vote-accelerated sigma decay.
 
     Parameters
     ----------
@@ -28,28 +31,29 @@ class ASHGF2SLV(ASHGF):
         Streak length at which full boost is reached.  Default ``3``.
     lip_clip : float
         Clipping factor for the Lipschitz-to-mean ratio.  Default ``5.0``.
+    sigma_decay : float
+        Extra multiplier applied to sigma each time a big step is accepted.
+        Default ``0.98``.
     **kwargs :
-        Passed to :class:`ASHGF`.
+        Passed to :class:`VOTE`.
     """
 
-    kind = "ASHGF2SLV"
+    kind = "VOTEK"
 
     def __init__(
         self,
         warmup: int = 3,
         lip_clip: float = 5.0,
+        sigma_decay: float = _SIGMA_DECAY,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
-        self._warmup = warmup
-        self._lip_clip = lip_clip
-        self._improve_streak: int = 0
-        self._prev_f_base: float | None = None
+        super().__init__(warmup=warmup, lip_clip=lip_clip, **kwargs)
+        self._sigma_decay = sigma_decay
+        self._big_step_accepted: bool = False
 
     def _setup(self, f, dim, x):
         super()._setup(f, dim, x)
-        self._improve_streak = 0
-        self._prev_f_base = None
+        self._big_step_accepted = False
 
     def _compute_step(
         self,
@@ -77,12 +81,6 @@ class ASHGF2SLV(ASHGF):
 
         if confidence > 0.0 and k > 1.01:
             f_cur = getattr(self, "_f_at_x", f(x))
-
-            # Candidate 1: uniform big step (same as plain 2S)
-            x_uni = x + k * step_size * direction
-            f_uni = f(x_uni)
-
-            # Candidate 2: Lipschitz-weighted big step (2SL-style)
             lipschitz = self._lipschitz
             can_aniso = (
                 lipschitz is not None
@@ -92,6 +90,8 @@ class ASHGF2SLV(ASHGF):
 
             candidates: list[tuple[np.ndarray, float]] = []
 
+            x_uni = x + k * step_size * direction
+            f_uni = f(x_uni)
             if np.isfinite(f_uni) and f_uni < f_base and f_uni < f_cur:
                 candidates.append((x_uni, f_uni))
 
@@ -106,6 +106,15 @@ class ASHGF2SLV(ASHGF):
 
             if candidates:
                 candidates.sort(key=lambda t: t[1])
+                self._big_step_accepted = True
                 return candidates[0]
 
+        self._big_step_accepted = False
         return x_base, f_base
+
+    def _post_iteration(
+        self, iteration: int, x: np.ndarray, grad: np.ndarray, f_val: float
+    ) -> None:
+        super()._post_iteration(iteration, x, grad, f_val)
+        if self._big_step_accepted:
+            self._sigma *= self._sigma_decay

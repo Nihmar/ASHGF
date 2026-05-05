@@ -13,25 +13,25 @@ from typing import Callable
 
 import numpy as np
 
-from ashgf.algorithms.ashgf_2slv import ASHGF2SLV
+from ashgf.algorithms.ashgf_vote import ASHGFVOTE
 from ashgf.gradient.estimators import estimate_lipschitz_constants, gauss_hermite_derivative
 from ashgf.gradient.sampling import _random_orthogonal, _rotate_basis_householder
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASHGF2SLV0"]
+__all__ = ["ASHGFVOTE0"]
 
 
-class ASHGF2SLV0(ASHGF2SLV):
+class ASHGFVOTE0(ASHGFVOTE):
     """ASHGF-2SLV with Householder basis rotation (O(d²)) and no warm-up.
 
     Parameters
     ----------
     **kwargs :
-        Passed to :class:`ASHGF2SLV`.
+        Passed to :class:`ASHGFVOTE`.
     """
 
-    kind = "ASHGF2SLV0"
+    kind = "ASHGFVOTE0"
 
     def __init__(self, **kwargs) -> None:
         super().__init__(t=1, **kwargs)

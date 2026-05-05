@@ -88,11 +88,11 @@ uv sync --group dev
 ### Quick Start
 
 ```python
-from ashgf.algorithms import ASGF2SLV
+from ashgf.algorithms import VOTE
 from ashgf.functions import get_function
 
 f = get_function("sphere")
-algo = ASGF2SLV(seed=42)
+algo = VOTE(seed=42)
 best, all_vals = algo.optimize(f, dim=100, max_iter=1000)
 print(f"Best: {best[-1][1]:.6e}")
 ```
@@ -293,7 +293,7 @@ $$x_{t+1}^{\text{big}} = x_t - \text{diag}(k) \cdot \alpha_t \hat{g}_t$$
 
 ---
 
-### 2SLV family — Vote (the winner)
+### VOTE family — Vote (the winner)
 
 The key insight from extensive benchmarking: rather than *predicting* which
 step direction (isotropic vs. anisotropic) is better, **evaluate both** and
@@ -313,27 +313,33 @@ $$\text{selected} = \arg\min \{f(\text{candidate}) \mid \text{safety}(\text{cand
 
 If no candidate passes, the base step $x_t^{\text{base}}$ is returned.
 
-Cost: 2 extra function evaluations per confident iteration (one for uniform,
-one for anisotropic) vs. 1 for plain 2S.
+**VOTEK** adds vote-accelerated sigma decay: $\sigma \gets \gamma_\kappa \sigma$
+($\gamma_\kappa = 0.98$) on each successful big-step vote, accelerating
+convergence when the gradient is reliable.
 
-**ASGF-2SLVK** adds a vote-accelerated sigma decay: when the 2SLV vote accepts a
-big step (indicating a reliable gradient direction), a gentle extra decay
-$\sigma \gets \gamma_\kappa \sigma$ (with $\gamma_\kappa = 0.98$) is applied.
-Convergence accelerates without sacrificing final accuracy.
+**VOTEKM** (multi-scale) adds a second gradient computed at $\sigma/2$, generating
+four candidates (uniform/aniso × two scales).  Costly but effective.
 
-| Variant | File | Modification | Cost | Wins |
-|---------|------|--------------|------|------|
-| **2SLVK** | `asgf_2slvk.py` | Vote-accelerated sigma decay | +2 eval | **96 (61.5%)** |
-| 2SLV | `asgf_2slv.py` | Baseline vote: uniform + aniso | +2 eval | 88 (56.4%) |
-| 2SLVC | `asgf_2slvc.py` | Conditional sqrt candidate | +2-3 eval | 87 (55.8%) |
-| 2SLVM | `asgf_2slvm.py` | Improvement-magnitude memory | +2 eval | 87 (55.8%) |
-| 2SLVS | `asgf_2slvs.py` | Spread-conditioned bonus | +2 eval | 79 (50.6%) |
-| 2SLVP | `asgf_2slvp.py` | Persistence bias | +2 eval | 77 (49.4%) |
-| 2SLVPS | `asgf_2slvps.py` | Persistence + spread | +2 eval | 77 (49.4%) |
-| 2SLV2 | `asgf_2slv2.py` | Triple candidate (+ sqrt) | +3 eval | 69 (44.2%) |
-| 2SLV2S | `asgf_2slv2s.py` | Triple + spread | +3 eval | 69 (44.2%) |
-| 2SLV2P | `asgf_2slv2p.py` | Triple + persistence | +3 eval | 66 (42.3%) |
-| 2SLV2PS | `asgf_2slv2ps.py$ | Triple + persistence + spread | +3 eval | 66 (42.3%) |
+**VOTEKMB** (budget-aware ensemble) adaptively selects candidates based on the
+Lipschitz spread: aggressive step on low-spread functions, sqrt candidate on
+medium spread, multi-scale on high spread.  Current champion.
+
+| Variant | File | Modification | Cost | d=10 | d=100 | Wins |
+|---------|------|--------------|------|------|-------|------|
+| **VOTEKMB** | `vote_kmb.py` | Budget-aware ensemble (3 strategies) | adaptive | 51 | 54 | **105** |
+| VOTEKM | `vote_km.py` | Multi-scale $\sigma$ vote (2 gradients) | +2× grad | 43 | 53 | 96 |
+| VOTEKMA | `vote_kma.py` | Adaptive second sigma | +2× grad | 42 | 54 | 96 |
+| VOTEKML | `vote_kml.py` | Conditional multi-scale (light) | conditional | 42 | 54 | 96 |
+| VOTEKMH | `vote_kmh.py` | Hybrid KM + KC | adaptive | 42 | 52 | 94 |
+| VOTEKC | `vote_kc.py$ | Candidate pruning + aggressive fallback | +2 eval | 43 | 42 | 85 |
+| VOTEK | `vote_k.py$ | Vote-accelerated sigma decay | +2 eval | 45 | 33 | 78 |
+| VOTE | `vote.py$ | Baseline vote: uniform + aniso | +2 eval | — | — | 77 |
+| VOTEKA | `vote_ka.py$ | Adaptive kappa (success-rate gated) | +2 eval | 27 | 33 | 60 |
+| VOTES | `vote_s.py$ | Conditional sqrt candidate (spread-gated) | +2-3 eval | — | — | 55 |
+| VOTEM | `vote_m.py$ | Improvement-magnitude memory | +2 eval | — | — | 55 |
+| VOTEP | `vote_p.py$ | Persistence bias | +2 eval | — | — | 49 |
+| VOTEV2 | `vote_v2.py$ | Triple candidate (+ sqrt) | +3 eval | — | — | 44 |
+| VOTE-V2S |  | Triple + spread | +3 eval | — | — | 44 |
 
 ---
 
@@ -352,7 +358,7 @@ Several variants were tested to overcome ASHGF's structural weaknesses
 | ASHGF-2SLV2GD | `ashgf_2slv2gd.py$ | Dual gradient + history decay | 32 | 22 | 54 |
 | ASHGF-2SLV2GA | `ashgf_2slv2ga.py$ | Alternate gradients (ASGF/ASHGF per iter) | 22 | 15 | 37 |
 
-None of the ASHGF variants reach ASGF-2SLV's performance (95 wins).
+None of the ASHGF variants reach VOTEKM's performance (95 wins).
 The gradient-history framework consistently underperforms ASGF's
 adaptive Householder rotation, regardless of the step-vote mechanism.
 
@@ -393,7 +399,8 @@ adaptive Householder rotation, regardless of the step-vote mechanism.
 | ASHGF-NG | `ashgf_ng.py$ | ASHGF without gradient history |
 | ASHGF-S | `ashgf_s.py$ | ASHGF simplified |
 | ASGF-2SLVC | `asgf_2slvc.py$ | Conditional sqrt candidate (spread-gated) |
-| ASGF-2SLVK | `asgf_2slvk.py$ | Vote-accelerated sigma decay |
+| VOTEK | `vote_k.py` | Vote-accelerated sigma decay |
+| VOTEKMBBH | `vote_kmbbh.py` | Basin-hopping wrapper for multimodal functions |
 | ASGF-2SLVM | `asgf_2slvm.py$ | Improvement-magnitude memory |
 
 ---
@@ -405,14 +412,15 @@ adaptive Householder rotation, regardless of the step-vote mechanism.
 Seed 2003, 500 iterations, patience 50, `--jobs 12`.
 
 ```
-Algorithm         Wins   Win%   vs ASGF
-ASGF-2SLVK         96   61.5%   +3.7x
-ASGF-2SLV          88   56.4%   +3.4x
-ASGF-2SL           59   37.8%   +2.3x
-ASGF-2S            56   35.9%   +2.2x
-ASGF               26   16.7%   baseline
-GD                 10    6.4%
-ASEBO/SGES          0    0.0%
+Algorithm         Wins   Win%   d=10  d=100  vs ASGF
+VOTEKMB           105   67.3%    51     54    +4.0x
+VOTEKM             96   61.5%    43     53    +3.7x
+VOTEKC             85   54.5%    43     42    +3.3x
+VOTEK              78   50.0%    45     33    +3.0x
+VOTE               77   49.4%    —      —     +3.0x
+ASGF               26   16.7%    —      —     baseline
+GD                 10    6.4%    —      — 
+ASEBO/SGES          0    0.0%    —      — 
 ```
 
 ---
@@ -430,8 +438,10 @@ ashgf/
 │   ├── gd.py / sges.py / ... # Thesis algorithms
 │   ├── asgf.py               # Core adaptive gradient-free
 │   ├── asgf_2s.py            # 2S: frequency-gated step boost
-│   ├── asgf_2s*.py           # 20+ 2S/2SL/2SLV variants
-│   ├── asgf_2slv.py          # 2SLV: try both, pick best (winner)
+│   ├── asgf_2s*.py           # 20+ 2S/2SL variants
+│   ├── vote.py               # VOTE: try both, pick best (winner family)
+│   ├── vote_k.py             # VOTEK: vote-accelerated sigma decay
+│   ├── vote_kmb.py           # VOTEKMB: budget-aware ensemble (champion)
 │   └── ...
 ├── functions/
 │   ├── __init__.py

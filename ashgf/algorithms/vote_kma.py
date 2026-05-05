@@ -1,9 +1,7 @@
-"""ASGF-2SLVC: 2SLV with conditional sqrt candidate.
-
-Adds the sqrt-weighted candidate (confidence / sqrt(ratio)) only when
-the Lipschitz spread is in a moderate range [1.5, 4.0].  Outside this
-range the algorithm falls back to uniform + full-aniso (standard 2SLV),
-avoiding the decision noise that hurt 2SLV2 on most functions.
+"""VOTEKM-A: adaptive second sigma — second gradient computed at
+sigma * (1 - confidence * 0.5), so the second scale adapts smoothly
+from sigma (confidence=0, effectively single-scale) to sigma*0.5
+(confidence=1, full multi-scale as in VOTEKM).
 """
 
 from __future__ import annotations
@@ -13,56 +11,24 @@ from typing import Callable
 
 import numpy as np
 
-from ashgf.algorithms.asgf_2slv import ASGF2SLV
+from ashgf.algorithms.vote_k import VOTEK
+from ashgf.gradient.estimators import gauss_hermite_derivative
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASGF2SLVC"]
-
-_SPREAD_MIN = 1.5
-_SPREAD_MAX = 4.0
+__all__ = ["VOTEKMA"]
 
 
-class ASGF2SLVC(ASGF2SLV):
-    """2SLV with conditional sqrt candidate.
-
-    Parameters
-    ----------
-    warmup : int
-        Streak length at which full boost is reached.  Default ``3``.
-    lip_clip : float
-        Clipping factor for the Lipschitz-to-mean ratio.  Default ``5.0``.
-    spread_min : float
-        Minimum Lipschitz spread to add the sqrt candidate.
-        Default ``1.5``.
-    spread_max : float
-        Maximum Lipschitz spread for the sqrt candidate.
-        Default ``4.0``.
-    **kwargs :
-        Passed to :class:`ASGF2SLV`.
-    """
-
-    kind = "ASGF2SLVC"
+class VOTEKMA(VOTEK):
+    kind = "VOTEKMA"
 
     def __init__(
-        self,
-        warmup: int = 3,
-        lip_clip: float = 5.0,
-        spread_min: float = _SPREAD_MIN,
-        spread_max: float = _SPREAD_MAX,
-        **kwargs,
+        self, warmup: int = 3, lip_clip: float = 5.0,
+        sigma_decay: float = 0.98, **kwargs,
     ) -> None:
-        super().__init__(warmup=warmup, lip_clip=lip_clip, **kwargs)
-        self._spread_min = spread_min
-        self._spread_max = spread_max
+        super().__init__(warmup=warmup, lip_clip=lip_clip, sigma_decay=sigma_decay, **kwargs)
 
-    def _compute_step(
-        self,
-        x: np.ndarray,
-        grad: np.ndarray,
-        f: Callable[[np.ndarray], float],
-        maximize: bool,
-    ) -> tuple[np.ndarray, float]:
+    def _compute_step(self, x, grad, f, maximize):
         step_size = self._get_step_size()
         direction = grad if maximize else -grad
 
@@ -107,16 +73,29 @@ class ASGF2SLVC(ASGF2SLV):
                 if np.isfinite(f_ani) and f_ani < f_base and f_ani < f_cur:
                     candidates.append((x_ani, f_ani))
 
-                # Conditional sqrt candidate
-                if self._spread_min < l_spread < self._spread_max:
-                    k_sqrt = confidence / np.sqrt(ratio)
-                    x_sqrt = x + (1.0 + k_sqrt) * step_size * direction
-                    f_sqrt = f(x_sqrt)
-                    if np.isfinite(f_sqrt) and f_sqrt < f_base and f_sqrt < f_cur:
-                        candidates.append((x_sqrt, f_sqrt))
+                if confidence > 0.0 and l_spread > 1.5:
+                    sigma2 = self._sigma * (1.0 - confidence * 0.5)
+                    if sigma2 < self._sigma * 0.99:
+                        basis = self._basis
+                        grad2, _, _, _ = gauss_hermite_derivative(x, f, sigma2, basis, self.m, f_cur)
+                        dir2 = grad2 if maximize else -grad2
+                        step2 = sigma2 / max(self._L_nabla, 1e-12)
+
+                        x_u2 = x + k * step2 * dir2
+                        f_u2 = f(x_u2)
+                        if np.isfinite(f_u2) and f_u2 < f_base and f_u2 < f_cur:
+                            candidates.append((x_u2, f_u2))
+
+                        k_a2 = confidence / ratio
+                        x_a2 = x + (1.0 + k_a2) * step2 * dir2
+                        f_a2 = f(x_a2)
+                        if np.isfinite(f_a2) and f_a2 < f_base and f_a2 < f_cur:
+                            candidates.append((x_a2, f_a2))
 
             if candidates:
                 candidates.sort(key=lambda t: t[1])
+                self._big_step_accepted = True
                 return candidates[0]
 
+        self._big_step_accepted = False
         return x_base, f_base

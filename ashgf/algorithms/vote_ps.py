@@ -1,7 +1,6 @@
-"""ASGF-2SLV2PS: 2SLV2 + persistence + spread bonus.
+"""ASGF-2SLVPS: 2SLV + persistence + spread bonus.
 
-The full combination: triple candidate (uniform + full-aniso + sqrt)
-with trajectory persistence and spread-conditioned selection.
+Combines trajectory persistence and spread-conditioned selection.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from ashgf.algorithms.asgf import ASGF
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ASGF2SLV2PS"]
+__all__ = ["VOTEPS"]
 
 _PERSISTENCE_ALPHA = 0.3
 _PERSISTENCE_EPS = 1e-12
@@ -24,8 +23,8 @@ _SPREAD_REF = 3.0
 _SPREAD_EPS = 1e-12
 
 
-class ASGF2SLV2PS(ASGF):
-    kind = "ASGF2SLV2PS"
+class VOTEPS(ASGF):
+    kind = "VOTEPS"
 
     def __init__(
         self, warmup: int = 3, lip_clip: float = 5.0,
@@ -70,17 +69,12 @@ class ASGF2SLV2PS(ASGF):
             k_aniso = confidence / ratio
             x_ani = x + (1.0 + k_aniso) * step_size * direction
             f_ani = f(x_ani)
-            if np.isfinite(f_ani) and f_ani < f_base and f_ani < f_cur:
-                cand.append((x_ani, f_ani, "aniso"))
-
-            k_sqrt = confidence / np.sqrt(ratio)
-            x_sqrt = x + (1.0 + k_sqrt) * step_size * direction
-            f_sqrt = f(x_sqrt)
-            if np.isfinite(f_sqrt) and f_sqrt < f_base and f_sqrt < f_cur:
-                cand.append((x_sqrt, f_sqrt, "sqrt"))
 
             raw_spread = float(np.max(lipschitz)) / max(l_mean, 1e-12)
             self._spread_smooth = self._spread_ema * self._spread_smooth + (1.0 - self._spread_ema) * raw_spread
+
+            if np.isfinite(f_ani) and f_ani < f_base and f_ani < f_cur:
+                cand.append((x_ani, f_ani, "aniso"))
 
         return cand
 
@@ -96,13 +90,13 @@ class ASGF2SLV2PS(ASGF):
             persist_bias = self._persistence_score * self._persist_eps
             s_bonus = self._spread_bonus()
             def key(t):
-                bonus = (persist_bias + s_bonus) if t[2] != "uni" else -(persist_bias + s_bonus)
+                bonus = (persist_bias + s_bonus) if t[2] == "aniso" else -(persist_bias + s_bonus)
                 return t[1] + bonus
             candidates.sort(key=key)
             chosen = candidates[0]
 
         self._persistence_score += (
-            (1.0 if chosen[2] != "uni" else -1.0) - self._persistence_score
+            (1.0 if chosen[2] == "aniso" else -1.0) - self._persistence_score
         ) * self._persist_alpha
 
         return chosen[0], chosen[1]

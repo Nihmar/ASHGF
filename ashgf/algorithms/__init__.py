@@ -21,17 +21,17 @@ from ashgf.algorithms.asgf_2sla import ASGF2SLA
 from ashgf.algorithms.asgf_2slb import ASGF2SLB
 from ashgf.algorithms.asgf_2slp import ASGF2SLP
 from ashgf.algorithms.asgf_2slt import ASGF2SLT
-from ashgf.algorithms.asgf_2slv import ASGF2SLV
-from ashgf.algorithms.asgf_2slv2 import ASGF2SLV2
-from ashgf.algorithms.asgf_2slv2p import ASGF2SLV2P
-from ashgf.algorithms.asgf_2slv2ps import ASGF2SLV2PS
-from ashgf.algorithms.asgf_2slv2s import ASGF2SLV2S
-from ashgf.algorithms.asgf_2slvc import ASGF2SLVC
-from ashgf.algorithms.asgf_2slvk import ASGF2SLVK
-from ashgf.algorithms.asgf_2slvm import ASGF2SLVM
-from ashgf.algorithms.asgf_2slvp import ASGF2SLVP
-from ashgf.algorithms.asgf_2slvps import ASGF2SLVPS
-from ashgf.algorithms.asgf_2slvs import ASGF2SLVS
+from ashgf.algorithms.vote import VOTE
+from ashgf.algorithms.vote_v2 import VOTEV2
+from ashgf.algorithms.vote_v2p import VOTEV2P
+from ashgf.algorithms.vote_v2ps import VOTEV2PS
+from ashgf.algorithms.vote_v2s import VOTEV2S
+from ashgf.algorithms.vote_s import VOTES
+from ashgf.algorithms.vote_k import VOTEK
+from ashgf.algorithms.vote_m import VOTEM
+from ashgf.algorithms.vote_p import VOTEP
+from ashgf.algorithms.vote_ps import VOTEPS
+from ashgf.algorithms.vote_b import VOTEB
 from ashgf.algorithms.asgf_2sl import ASGF2SL
 from ashgf.algorithms.asgf_2sm import ASGF2SM
 from ashgf.algorithms.asgf_2sma import ASGF2SMA
@@ -60,12 +60,26 @@ from ashgf.algorithms.ashgf import ASHGF
 from ashgf.algorithms.ashgf_2f import ASHGF2F
 from ashgf.algorithms.ashgf_2fd import ASHGF2FD
 from ashgf.algorithms.ashgf_2sma import ASHGF2SMA
-from ashgf.algorithms.ashgf_2slv import ASHGF2SLV
-from ashgf.algorithms.ashgf_2slv0 import ASHGF2SLV0
-from ashgf.algorithms.ashgf_2slv2g import ASHGF2SLV2G
-from ashgf.algorithms.ashgf_2slv2ga import ASHGF2SLV2GA
-from ashgf.algorithms.ashgf_2slv2gd import ASHGF2SLV2GD
-from ashgf.algorithms.ashgf_2slva import ASHGF2SLVA
+from ashgf.algorithms.ashgf_vote import ASHGFVOTE
+from ashgf.algorithms.ashgf_vote0 import ASHGFVOTE0
+from ashgf.algorithms.vote_ka import VOTEKA
+from ashgf.algorithms.vote_kc import VOTEKC
+from ashgf.algorithms.vote_km import VOTEKM
+from ashgf.algorithms.vote_kml import VOTEKML
+from ashgf.algorithms.vote_kmh import VOTEKMH
+from ashgf.algorithms.vote_kma import VOTEKMA
+from ashgf.algorithms.vote_kmb import VOTEKMB
+from ashgf.algorithms.vote_kmba import VOTEKMBA
+from ashgf.algorithms.vote_kmbr import VOTEKMBR
+from ashgf.algorithms.vote_kmbs import VOTEKMBS
+from ashgf.algorithms.vote_kmbbh import VOTEKMBBH
+from ashgf.algorithms.vote_kmbsr import VOTEKMBSR
+from ashgf.algorithms.vote_kmbt import VOTEKMBT
+from ashgf.algorithms.vote_kr import VOTEKR
+from ashgf.algorithms.ashgf_vote2g import ASHGFVOTE2G
+from ashgf.algorithms.ashgf_vote2ga import ASHGFVOTE2GA
+from ashgf.algorithms.ashgf_vote2gd import ASHGFVOTE2GD
+from ashgf.algorithms.ashgf_votea import ASHGFVOTEA
 from ashgf.algorithms.ashgf_2x import ASHGF2X
 from ashgf.algorithms.ashgf_d import ASHGFD
 from ashgf.algorithms.ashgf_ng import ASHGFNG
@@ -81,8 +95,8 @@ __all__ = [
     "ASGFRS", "ASGFLS", "ASGFLS2", "ASGFLS3", "ASGFLS4", "ASGFLS5",
     "ASGFCD", "ASGFSS", "ASGFAQ", "ASGFBW",
     "ASGFM", "ASGF2X", "ASGF2A", "ASGF2F", "ASGF2G", "ASGF2H", "ASGF2I", "ASGF2J", "ASGF2P",
-    "ASGF2S", "ASGF2SA", "ASGF2SAW", "ASGF2SD", "ASGF2SG", "ASGF2SL", "ASGF2SLA", "ASGF2SLB", "ASGF2SLD", "ASGF2SLP", "ASGF2SLR", "ASGF2SLS", "ASGF2SLT", "ASGF2SLV", "ASGF2SLV2", "ASGF2SLV2P", "ASGF2SLV2PS", "ASGF2SLV2S", "ASGF2SLVC", "ASGF2SLVK", "ASGF2SLVM", "ASGF2SLVP", "ASGF2SLVPS", "ASGF2SLVS",
+    "ASGF2S", "ASGF2SA", "ASGF2SAW", "ASGF2SD", "ASGF2SG", "ASGF2SL", "ASGF2SLA", "ASGF2SLB", "ASGF2SLD", "ASGF2SLP", "ASGF2SLR", "ASGF2SLS", "ASGF2SLT", "VOTE", "VOTEKA", "VOTEKC", "VOTEKM", "VOTEKMA", "VOTEKMB", "VOTEKMBA", "VOTEKMBS", "VOTEKMBT", "VOTEKMH", "VOTEKML", "VOTEKR", "VOTEV2", "VOTEV2P", "VOTEV2PS", "VOTEV2S", "VOTES", "VOTEK", "VOTEM", "VOTEP", "VOTEPS", "VOTEB",
     "ASGF2SM", "ASGF2SMA", "ASGF2SMC", "ASGF2SMI", "ASGF2SN", "ASGF2SQ",
     "ASGF2SR", "ASGF2SW", "ASGF2T", "ASGFC", "ASGFHX",
-    "ASHGF2F", "ASHGF2FD", "ASHGF2SMA", "ASHGF2SLV", "ASHGF2SLV0", "ASHGF2SLV2G", "ASHGF2SLV2GA", "ASHGF2SLV2GD", "ASHGF2SLVA", "ASHGF2X", "ASHGFD",
+    "ASHGF2F", "ASHGF2FD", "ASHGF2SMA", "ASHGFVOTE", "ASHGFVOTE0", "ASHGFVOTE2G", "ASHGFVOTE2GA", "ASHGFVOTE2GD", "ASHGFVOTEA", "ASHGF2X", "ASHGFD",
 ]
