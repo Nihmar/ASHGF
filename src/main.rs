@@ -5,7 +5,9 @@ use std::process;
 use std::fs;
 use std::path::Path;
 
-use ashgf::algorithms::{OptimizeOptions, Optimizer, ASEBO, ASGF, ASHGF, ASHGFNG, ASHGFS, GD, SGES};
+use ashgf::algorithms::{
+    Asgf2s, Asgf2sw, OptimizeOptions, Optimizer, ASEBO, ASGF, ASHGF, ASHGFNG, ASHGFS, GD, SGES,
+};
 use ashgf::benchmark::plot::{plot_comparison_bars, plot_convergence_grid, plot_per_function};
 use ashgf::benchmark::runner::run_benchmarks_with_history;
 use ashgf::cli::args::{AlgoName, Cli, Command};
@@ -69,6 +71,14 @@ fn run(cli: Cli) -> i32 {
                     let mut algo = ASGF::default();
                     algo.optimize(&f, args.dim, None, &options, &mut rng)
                 }
+                AlgoName::Asgf2s => {
+                    let mut algo = Asgf2s::default();
+                    algo.optimize(&f, args.dim, None, &options, &mut rng)
+                }
+                AlgoName::Asgf2sw => {
+                    let mut algo = Asgf2sw::default();
+                    algo.optimize(&f, args.dim, None, &options, &mut rng)
+                }
                 AlgoName::Ashgf => {
                     let mut algo = ASHGF::default();
                     algo.optimize(&f, args.dim, None, &options, &mut rng)
@@ -77,14 +87,6 @@ fn run(cli: Cli) -> i32 {
                     let mut algo = ASHGFS::default();
                     algo.optimize(&f, args.dim, None, &options, &mut rng)
                 }
-                    AlgoName::AshgfS => {
-                        let mut algo = ASHGFS::default();
-                        algo.optimize(&f, args.dim, None, &options, &mut rng)
-                    }
-                        AlgoName::AshgfS => {
-                            let mut algo = ASHGFS::default();
-                            algo.optimize(&f, args.dim, None, &options, &mut rng)
-                        }
                 AlgoName::AshgfNg => {
                     let mut algo = ASHGFNG::default();
                     algo.optimize(&f, args.dim, None, &options, &mut rng)
@@ -140,22 +142,22 @@ fn run(cli: Cli) -> i32 {
                         let mut algo = ASGF::default();
                         algo.optimize(&f, args.dim, None, &options, &mut rng)
                     }
+                    AlgoName::Asgf2s => {
+                        let mut algo = Asgf2s::default();
+                        algo.optimize(&f, args.dim, None, &options, &mut rng)
+                    }
+                    AlgoName::Asgf2sw => {
+                        let mut algo = Asgf2sw::default();
+                        algo.optimize(&f, args.dim, None, &options, &mut rng)
+                    }
                     AlgoName::Ashgf => {
                         let mut algo = ASHGF::default();
                         algo.optimize(&f, args.dim, None, &options, &mut rng)
                     }
-                AlgoName::AshgfS => {
-                    let mut algo = ASHGFS::default();
-                    algo.optimize(&f, args.dim, None, &options, &mut rng)
-                }
                     AlgoName::AshgfS => {
                         let mut algo = ASHGFS::default();
                         algo.optimize(&f, args.dim, None, &options, &mut rng)
                     }
-                        AlgoName::AshgfS => {
-                            let mut algo = ASHGFS::default();
-                            algo.optimize(&f, args.dim, None, &options, &mut rng)
-                        }
                     AlgoName::AshgfNg => {
                         let mut algo = ASHGFNG::default();
                         algo.optimize(&f, args.dim, None, &options, &mut rng)
@@ -202,6 +204,8 @@ fn run(cli: Cli) -> i32 {
                     AlgoName::Gd,
                     AlgoName::Sges,
                     AlgoName::Asgf,
+                    AlgoName::Asgf2s,
+                    AlgoName::Asgf2sw,
                     AlgoName::Ashgf,
                     AlgoName::AshgfNg,
                     AlgoName::AshgfS,
@@ -213,6 +217,8 @@ fn run(cli: Cli) -> i32 {
             let mut gd = GD::new(args.lr, args.sigma, 1e-8);
             let mut sges = SGES::new(args.lr, args.sigma, 0.9, 0.1, 0.5, 1.1, 50, 1e-8);
             let mut asgf = ASGF::default();
+            let mut asgf_2s = Asgf2s::default();
+            let mut asgf_2sw = Asgf2sw::default();
             let mut ashgf = ASHGF::default();
             let mut ashgf_ng = ASHGFNG::default();
             let mut ashgf_s = ASHGFS::default();
@@ -222,6 +228,8 @@ fn run(cli: Cli) -> i32 {
             gd.n_jobs = args.jobs;
             sges.n_jobs = args.jobs;
             asgf.n_jobs = args.jobs;
+            asgf_2s.inner.n_jobs = args.jobs;
+            asgf_2sw.inner.n_jobs = args.jobs;
             ashgf.n_jobs = args.jobs;
             ashgf_ng.n_jobs = args.jobs;
             ashgf_s.n_jobs = args.jobs;
@@ -236,6 +244,12 @@ fn run(cli: Cli) -> i32 {
             }
             if algos_to_run.contains(&AlgoName::Asgf) {
                 algorithms.push(("ASGF", &mut asgf));
+            }
+            if algos_to_run.contains(&AlgoName::Asgf2s) {
+                algorithms.push(("ASGF-2S", &mut asgf_2s));
+            }
+            if algos_to_run.contains(&AlgoName::Asgf2sw) {
+                algorithms.push(("ASGF-2SW", &mut asgf_2sw));
             }
             if algos_to_run.contains(&AlgoName::Ashgf) {
                 algorithms.push(("ASHGF", &mut ashgf));
@@ -264,6 +278,7 @@ fn run(cli: Cli) -> i32 {
                 args.seed,
                 args.patience,
                 args.ftol,
+                args.jobs,
             );
 
             // Organise output: one subdirectory per dimension
@@ -372,9 +387,12 @@ fn run(cli: Cli) -> i32 {
                     AlgoName::Gd,
                     AlgoName::Sges,
                     AlgoName::Asgf,
+                    AlgoName::Asgf2s,
+                    AlgoName::Asgf2sw,
                     AlgoName::Ashgf,
                     AlgoName::AshgfNg,
                     AlgoName::AshgfS,
+                    AlgoName::Asebo,
                 ]
             });
 
@@ -412,18 +430,18 @@ fn run(cli: Cli) -> i32 {
                             let mut algo = ASGF::default();
                             algo.optimize(&f, args.dim, None, &options, &mut rng)
                         }
+                        AlgoName::Asgf2s => {
+                            let mut algo = Asgf2s::default();
+                            algo.optimize(&f, args.dim, None, &options, &mut rng)
+                        }
+                        AlgoName::Asgf2sw => {
+                            let mut algo = Asgf2sw::default();
+                            algo.optimize(&f, args.dim, None, &options, &mut rng)
+                        }
                         AlgoName::Ashgf => {
                             let mut algo = ASHGF::default();
                             algo.optimize(&f, args.dim, None, &options, &mut rng)
                         }
-                AlgoName::AshgfS => {
-                    let mut algo = ASHGFS::default();
-                    algo.optimize(&f, args.dim, None, &options, &mut rng)
-                }
-                    AlgoName::AshgfS => {
-                        let mut algo = ASHGFS::default();
-                        algo.optimize(&f, args.dim, None, &options, &mut rng)
-                    }
                         AlgoName::AshgfS => {
                             let mut algo = ASHGFS::default();
                             algo.optimize(&f, args.dim, None, &options, &mut rng)

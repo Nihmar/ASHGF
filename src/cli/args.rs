@@ -31,6 +31,10 @@ pub enum AlgoName {
     Gd,
     Sges,
     Asgf,
+    #[clap(name = "asgf-2s")]
+    Asgf2s,
+    #[clap(name = "asgf-2sw")]
+    Asgf2sw,
     Ashgf,
     AshgfNg,
     AshgfS,
@@ -43,6 +47,8 @@ impl std::fmt::Display for AlgoName {
             AlgoName::Gd => write!(f, "gd"),
             AlgoName::Sges => write!(f, "sges"),
             AlgoName::Asgf => write!(f, "asgf"),
+            AlgoName::Asgf2s => write!(f, "asgf-2s"),
+            AlgoName::Asgf2sw => write!(f, "asgf-2sw"),
             AlgoName::Ashgf => write!(f, "ashgf"),
             AlgoName::AshgfNg => write!(f, "ashgf-ng"),
             AlgoName::AshgfS => write!(f, "ashgf-s"),
@@ -144,7 +150,7 @@ pub struct CompareArgs {
 #[derive(Parser)]
 pub struct BenchmarkArgs {
     /// Algorithms to include (default: all).
-    #[arg(long)]
+    #[arg(long, num_args = 1..)]
     pub algos: Option<Vec<AlgoName>>,
 
     /// Only include functions matching this substring.
@@ -207,7 +213,7 @@ pub struct StatsArgs {
     pub function: String,
 
     /// Algorithms to include (default: all).
-    #[arg(long)]
+    #[arg(long, num_args = 1..)]
     pub algos: Option<Vec<AlgoName>>,
 
     /// Problem dimension.

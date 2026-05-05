@@ -1,5 +1,7 @@
 pub mod asebo;
 pub mod asgf;
+pub mod asgf_2s;
+pub mod asgf_2sw;
 pub mod ashgf;
 pub mod ashgf_ng;
 pub mod ashgf_s;
@@ -9,6 +11,8 @@ pub mod sges;
 
 pub use asebo::ASEBO;
 pub use asgf::ASGF;
+pub use asgf_2s::Asgf2s;
+pub use asgf_2sw::Asgf2sw;
 pub use ashgf::ASHGF;
 pub use ashgf_ng::ASHGFNG;
 pub use ashgf_s::ASHGFS;

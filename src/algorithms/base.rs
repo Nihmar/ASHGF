@@ -38,7 +38,7 @@ impl Default for OptimizeOptions {
             maximize: false,
             patience: None,
             ftol: None,
-            log_interval: 25,
+            log_interval: 50,
             n_jobs: 0,
         }
     }
@@ -98,6 +98,30 @@ pub trait Optimizer {
     ) {
     }
 
+    /// Compute the next point and its function value.
+    ///
+    /// Override to implement line-search, trust-region, or step-boost logic.
+    /// Default: `x_new = x ± step_size * grad`.
+    ///
+    /// `f_at_x` is the cached value `f(x)` (may be `None` if not available).
+    fn compute_step(
+        &mut self,
+        x: &Array1<f64>,
+        grad: &Array1<f64>,
+        f: &(dyn Fn(&Array1<f64>) -> f64 + Sync),
+        maximize: bool,
+        _f_at_x: Option<f64>,
+    ) -> (Array1<f64>, f64) {
+        let alpha = self.step_size();
+        let x_new = if maximize {
+            x + &(alpha * grad)
+        } else {
+            x - &(alpha * grad)
+        };
+        let val = f(&x_new);
+        (x_new, val)
+    }
+
     /// Convergence threshold on step size ‖x_{k+1} - x_k‖.
     fn eps(&self) -> f64;
 
@@ -139,16 +163,30 @@ pub trait Optimizer {
         // ---- Hook: setup ----
         self.setup(f, dim, &x);
 
+        tracing::info!(
+            "START | algo={} | dim={} | max_iter={} | f0={:.6e}",
+            self.kind(),
+            dim,
+            options.max_iter,
+            current_val,
+        );
+
         let mut actual_iter: usize = 0;
 
         for i in 1..=options.max_iter {
             if i % options.log_interval == 0 {
                 let last_val = all_values.last().copied().unwrap_or(f64::NAN);
+                let gap = if best_value.is_finite() && last_val.is_finite() {
+                    (last_val - best_value).abs()
+                } else {
+                    0.0
+                };
                 tracing::info!(
-                    "iter={:5}  f(x)={:.6e}  best={:.6e}",
+                    "{:>5} | f={:.6e} | best={:.6e} | gap={:.2e}",
                     i,
                     last_val,
                     best_value,
+                    gap,
                 );
             }
 
@@ -157,29 +195,23 @@ pub trait Optimizer {
 
             // Guard against NaN/inf in gradient
             if !grad.iter().all(|v| v.is_finite()) {
-                tracing::warn!("iter={}: gradient contains NaN/inf — terminating", i);
+                tracing::warn!("FAIL | iter={} | gradient NaN/inf", i);
                 break;
             }
 
-            // 2. Update x
-            let alpha = self.step_size();
-            let x_new = if options.maximize {
-                &x + &(alpha * &grad)
-            } else {
-                &x - &(alpha * &grad)
-            };
+            // 2. Compute next point (delegated to compute_step for subclasses)
+            let f_at_x = all_values.last().copied();
+            let (x_new, current_val) = self.compute_step(&x, &grad, f, options.maximize, f_at_x);
 
             // Guard against NaN/inf in x
             if !x_new.iter().all(|v| v.is_finite()) {
-                tracing::warn!("iter={}: x contains NaN/inf — terminating", i);
+                tracing::warn!("FAIL | iter={} | x NaN/inf", i);
                 break;
             }
 
-            let current_val = f(&x_new);
-
             // Guard against NaN/inf in function value
             if !current_val.is_finite() {
-                tracing::warn!("iter={}: f(x) = {} — terminating", i, current_val);
+                tracing::warn!("FAIL | iter={} | f(x) non-finite", i);
                 all_values.push(current_val);
                 break;
             }
@@ -215,7 +247,7 @@ pub trait Optimizer {
 
                     if stall_count >= patience {
                         tracing::info!(
-                            "Stopped at iteration {} (no improvement for {} iters)",
+                            "STALL | iter={} | no improvement for {} iters",
                             i,
                             patience,
                         );
@@ -230,7 +262,7 @@ pub trait Optimizer {
                     .mapv(|v| v.abs())
                     .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
                 if max_step < eps {
-                    tracing::info!("Converged at iteration {} (step < eps)", i);
+                    tracing::info!("CONV | iter={} | step < eps", i);
                     break;
                 }
             }
@@ -245,11 +277,18 @@ pub trait Optimizer {
         }
 
         let last_val = all_values.last().copied().unwrap_or(f64::NAN);
+        let total_iter = all_values.len().saturating_sub(1);
+        let status = if total_iter < options.max_iter {
+            "converged"
+        } else {
+            "max_iter"
+        };
         tracing::info!(
-            "final  f(x)={:.6e}  iter={}  best={:.6e}",
+            "DONE | iter={} | f={:.6e} | best={:.6e} | {}",
+            total_iter,
             last_val,
-            all_values.len().saturating_sub(1),
             best_value,
+            status,
         );
 
         let converged = actual_iter < options.max_iter;

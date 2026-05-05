@@ -163,58 +163,181 @@ impl ASHGFS {
         }
     }
 
-    pub fn _run(&mut self, f: &(dyn Fn(&Array1<f64>) -> f64 + Sync), dim: usize,
-                x_init: Option<&Array1<f64>>, options: &OptimizeOptions,
-                rng: &mut SeededRng) -> OptimizeResult {
+    pub fn _run(
+        &mut self,
+        f: &(dyn Fn(&Array1<f64>) -> f64 + Sync),
+        dim: usize,
+        x_init: Option<&Array1<f64>>,
+        options: &OptimizeOptions,
+        rng: &mut SeededRng,
+    ) -> OptimizeResult {
         let eps = self.eps();
-        let mut x = if let Some(x0) = x_init { x0.clone() } else {
-            Array1::from_shape_fn(dim, |_| rand::Rng::sample(&mut rng.rng, rand_distr::StandardNormal))
+        let mut x = if let Some(x0) = x_init {
+            x0.clone()
+        } else {
+            Array1::from_shape_fn(dim, |_| {
+                rand::Rng::sample(&mut rng.rng, rand_distr::StandardNormal)
+            })
         };
         let mut av = Vec::with_capacity(options.max_iter + 1);
-        let cv = f(&x); av.push(cv);
-        let mut xp = x.clone(); let mut fp = cv;
-        let mut best = cv; let mut bv = vec![(x.clone(), best)]; let mut sc: usize = 0;
-        self.setup(f, dim, &x); let mut ai = 0;
+        let cv = f(&x);
+        av.push(cv);
+        let mut xp = x.clone();
+        let mut fp = cv;
+        let mut best = cv;
+        let mut bv = vec![(x.clone(), best)];
+        let mut sc: usize = 0;
+        self.setup(f, dim, &x);
+
+        let tag = if self.safeguard_active {
+            "safe"
+        } else {
+            "fast"
+        };
+        let log_every = options.log_interval.max(1);
+        tracing::info!(
+            "START | algo=ASHGF-S({}) | dim={} | max_iter={} | f0={:.6e}",
+            tag,
+            dim,
+            options.max_iter,
+            cv
+        );
+
+        let mut ai = 0;
         for i in 1..=options.max_iter {
+            if i % log_every == 0 {
+                let last_val = av.last().copied().unwrap_or(f64::NAN);
+                let gap = if best.is_finite() && last_val.is_finite() {
+                    (last_val - best).abs()
+                } else {
+                    0.0
+                };
+                tracing::info!(
+                    "{:>5} | f={:.6e} | best={:.6e} | gap={:.2e}",
+                    i,
+                    last_val,
+                    best,
+                    gap
+                );
+            }
             let g = self.grad_estimator(&x, f, rng);
-            if !g.iter().all(|v| v.is_finite()) { break; }
+            if !g.iter().all(|v| v.is_finite()) {
+                tracing::warn!("FAIL | iter={} | gradient NaN/inf", i);
+                break;
+            }
             let a = self.step_size();
-            let mut xn = if options.maximize { &x + &(a * &g) } else { &x - &(a * &g) };
-            if !xn.iter().all(|v| v.is_finite()) { break; }
+            let mut xn = if options.maximize {
+                &x + &(a * &g)
+            } else {
+                &x - &(a * &g)
+            };
+            if !xn.iter().all(|v| v.is_finite()) {
+                tracing::warn!("FAIL | iter={} | x NaN/inf", i);
+                break;
+            }
             let mut cur = f(&xn);
-            if self.safeguard_active && !options.maximize && cur.is_finite() && fp.is_finite() && cur > fp {
+            if self.safeguard_active
+                && !options.maximize
+                && cur.is_finite()
+                && fp.is_finite()
+                && cur > fp
+            {
                 self.sigma /= 2.0;
                 let g2 = self.grad_estimator(&x, f, rng);
                 if g2.iter().all(|v| v.is_finite()) {
                     let a2 = self.step_size();
-                    let xn2 = if options.maximize { &x + &(a2 * &g2) } else { &x - &(a2 * &g2) };
+                    let xn2 = if options.maximize {
+                        &x + &(a2 * &g2)
+                    } else {
+                        &x - &(a2 * &g2)
+                    };
                     if xn2.iter().all(|v| v.is_finite()) {
                         let cv2 = f(&xn2);
-                        if cv2.is_finite() && cv2 <= fp { cur = cv2; xn = xn2; }
-                        else { cur = fp; xn = x.clone(); }
-                    } else { cur = fp; xn = x.clone(); }
-                } else { cur = fp; xn = x.clone(); }
+                        if cv2.is_finite() && cv2 <= fp {
+                            cur = cv2;
+                            xn = xn2;
+                        } else {
+                            cur = fp;
+                            xn = x.clone();
+                        }
+                    } else {
+                        cur = fp;
+                        xn = x.clone();
+                    }
+                } else {
+                    cur = fp;
+                    xn = x.clone();
+                }
             }
-            if !cur.is_finite() { av.push(cur); break; }
+            if !cur.is_finite() {
+                tracing::warn!("FAIL | iter={} | f(x) non-finite", i);
+                av.push(cur);
+                break;
+            }
             av.push(cur);
-            let imp = if options.maximize { cur > best } else { cur < best };
-            if imp { best = cur; bv.push((xn.clone(), best)); }
-            if let Some(pat) = options.patience { if pat > 0 {
-                if imp { sc = 0; } else if let Some(ft) = options.ftol {
-                    if (cur - fp).abs() < ft { sc += 1; } else { sc = 0; }
-                } else { sc += 1; }
-                if sc >= pat { break; }
-            }}
-            if i % 5 == 0 {
-                let ms = (&xn - &xp).mapv(|v| v.abs()).fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-                if ms < eps { break; }
+            let imp = if options.maximize {
+                cur > best
+            } else {
+                cur < best
+            };
+            if imp {
+                best = cur;
+                bv.push((xn.clone(), best));
             }
-            xp = xn.clone(); fp = cur; x = xn;
-            self.post_iteration(i, &x, &g, fp); ai = i;
+            if let Some(pat) = options.patience {
+                if pat > 0 {
+                    if imp {
+                        sc = 0;
+                    } else if let Some(ft) = options.ftol {
+                        if (cur - fp).abs() < ft {
+                            sc += 1;
+                        } else {
+                            sc = 0;
+                        }
+                    } else {
+                        sc += 1;
+                    }
+                    if sc >= pat {
+                        tracing::info!("STALL | iter={} | no improvement for {} iters", i, pat);
+                        break;
+                    }
+                }
+            }
+            if i % 5 == 0 {
+                let ms = (&xn - &xp)
+                    .mapv(|v| v.abs())
+                    .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+                if ms < eps {
+                    tracing::info!("CONV | iter={} | step < eps", i);
+                    break;
+                }
+            }
+            xp = xn.clone();
+            fp = cur;
+            x = xn;
+            self.post_iteration(i, &x, &g, fp);
+            ai = i;
         }
-        OptimizeResult { best_values: bv, all_values: av, iterations: ai, converged: ai < options.max_iter }
+        let total_iter = av.len().saturating_sub(1);
+        let status = if total_iter < options.max_iter {
+            "converged"
+        } else {
+            "max_iter"
+        };
+        tracing::info!(
+            "DONE | iter={} | f={:.6e} | best={:.6e} | {}",
+            total_iter,
+            av.last().copied().unwrap_or(f64::NAN),
+            best,
+            status
+        );
+        OptimizeResult {
+            best_values: bv,
+            all_values: av,
+            iterations: ai,
+            converged: ai < options.max_iter,
+        }
     }
-
 }
 
 impl Optimizer for ASHGFS {
@@ -406,8 +529,14 @@ impl Optimizer for ASHGFS {
 
         grad
     }
-    fn optimize(&mut self, f: &(dyn Fn(&Array1<f64>) -> f64 + Sync), dim: usize,
-                x_init: Option<&Array1<f64>>, options: &OptimizeOptions, rng: &mut SeededRng) -> OptimizeResult {
+    fn optimize(
+        &mut self,
+        f: &(dyn Fn(&Array1<f64>) -> f64 + Sync),
+        dim: usize,
+        x_init: Option<&Array1<f64>>,
+        options: &OptimizeOptions,
+        rng: &mut SeededRng,
+    ) -> OptimizeResult {
         let seed = rng.seed;
         self.safeguard_active = false;
         let r1 = self._run(f, dim, x_init, options, &mut SeededRng::new(seed));
@@ -415,10 +544,14 @@ impl Optimizer for ASHGFS {
         self.safeguard_active = true;
         let r2 = self._run(f, dim, x_init, options, &mut SeededRng::new(seed));
         let b2 = *r2.all_values.last().unwrap_or(&f64::INFINITY);
-        if b1.is_finite() && (!b2.is_finite() || b1 <= b2) { r1 } else if b2.is_finite() { r2 } else { r1 }
+        if b1.is_finite() && (!b2.is_finite() || b1 <= b2) {
+            r1
+        } else if b2.is_finite() {
+            r2
+        } else {
+            r1
+        }
     }
-
-
 }
 
 impl Default for ASHGFS {
