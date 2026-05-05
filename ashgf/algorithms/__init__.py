@@ -57,6 +57,12 @@ from ashgf.algorithms.ashgf import ASHGF
 from ashgf.algorithms.ashgf_2f import ASHGF2F
 from ashgf.algorithms.ashgf_2fd import ASHGF2FD
 from ashgf.algorithms.ashgf_2sma import ASHGF2SMA
+from ashgf.algorithms.ashgf_2slv import ASHGF2SLV
+from ashgf.algorithms.ashgf_2slv0 import ASHGF2SLV0
+from ashgf.algorithms.ashgf_2slv2g import ASHGF2SLV2G
+from ashgf.algorithms.ashgf_2slv2ga import ASHGF2SLV2GA
+from ashgf.algorithms.ashgf_2slv2gd import ASHGF2SLV2GD
+from ashgf.algorithms.ashgf_2slva import ASHGF2SLVA
 from ashgf.algorithms.ashgf_2x import ASHGF2X
 from ashgf.algorithms.ashgf_d import ASHGFD
 from ashgf.algorithms.ashgf_ng import ASHGFNG
@@ -75,5 +81,5 @@ __all__ = [
     "ASGF2S", "ASGF2SA", "ASGF2SAW", "ASGF2SD", "ASGF2SG", "ASGF2SL", "ASGF2SLA", "ASGF2SLB", "ASGF2SLD", "ASGF2SLP", "ASGF2SLR", "ASGF2SLS", "ASGF2SLT", "ASGF2SLV", "ASGF2SLV2", "ASGF2SLV2P", "ASGF2SLV2PS", "ASGF2SLV2S", "ASGF2SLVP", "ASGF2SLVPS", "ASGF2SLVS",
     "ASGF2SM", "ASGF2SMA", "ASGF2SMC", "ASGF2SMI", "ASGF2SN", "ASGF2SQ",
     "ASGF2SR", "ASGF2SW", "ASGF2T", "ASGFC", "ASGFHX",
-    "ASHGF2F", "ASHGF2FD", "ASHGF2SMA", "ASHGF2X", "ASHGFD",
+    "ASHGF2F", "ASHGF2FD", "ASHGF2SMA", "ASHGF2SLV", "ASHGF2SLV0", "ASHGF2SLV2G", "ASHGF2SLV2GA", "ASHGF2SLV2GD", "ASHGF2SLVA", "ASHGF2X", "ASHGFD",
 ]

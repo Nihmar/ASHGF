@@ -318,20 +318,41 @@ If no candidate passes, the base step $x_t^{\text{base}}$ is returned.
 Cost: 2 extra function evaluations per confident iteration (one for uniform,
 one for anisotropic) vs. 1 for plain 2S.
 
-**Benchmark result**: 91 / 156 wins (58.3%) across 78 test functions
+**Benchmark result**: 95 / 156 wins (60.9%) across 78 test functions
 at dimensions 10 and 100, using seed 2003, 500 iterations, patience 50.
 The second-best algorithm (ASGF-2SL) achieves 59 wins (37.8%).
 
-| Variant | File | Modification | Cost | Overall wins |
-|---------|------|--------------|------|-------------|
-| **2SLV** | `asgf_2slv.py` | Baseline vote: uniform + aniso | +2 eval | **91 (58.3%)** |
-| 2SLV2 | `asgf_2slv2.py$ | Triple candidate (+ sqrt) | +3 eval | 69 (44.2%) |
-| 2SLVP | `asgf_2slvp.py$ | Persistence bias | +2 eval | 77 (49.4%) |
-| 2SLVS | `asgf_2slvs.py$ | Spread-conditioned bonus | +2 eval | 79 (50.6%) |
-| 2SLV2P | `asgf_2slv2p.py$ | Triple + persistence | +3 eval | 66 (42.3%) |
-| 2SLV2S | `asgf_2slv2s.py$ | Triple + spread | +3 eval | 69 (44.2%) |
-| 2SLVPS | `asgf_2slvps.py$ | Persistence + spread | +2 eval | 77 (49.4%) |
+| Variant | File | Modification | Cost | Wins |
+|---------|------|--------------|------|------|
+| **2SLV** | `asgf_2slv.py` | Baseline vote: uniform + aniso | +2 eval | **95 (60.9%)** |
+| 2SLV2 | `asgf_2slv2.py` | Triple candidate (+ sqrt) | +3 eval | 69 (44.2%) |
+| 2SLVP | `asgf_2slvp.py` | Persistence bias | +2 eval | 77 (49.4%) |
+| 2SLVS | `asgf_2slvs.py` | Spread-conditioned bonus | +2 eval | 79 (50.6%) |
+| 2SLV2P | `asgf_2slv2p.py` | Triple + persistence | +3 eval | 66 (42.3%) |
+| 2SLV2S | `asgf_2slv2s.py` | Triple + spread | +3 eval | 69 (44.2%) |
+| 2SLVPS | `asgf_2slvps.py` | Persistence + spread | +2 eval | 77 (49.4%) |
 | 2SLV2PS | `asgf_2slv2ps.py$ | Triple + persistence + spread | +3 eval | 66 (42.3%) |
+
+---
+
+### ASHGF-2SLV family — gradient-history meets 2SLV
+
+Transfers the 2SLV vote mechanism to the ASHGF gradient-history framework.
+Several variants were tested to overcome ASHGF's structural weaknesses
+(warm-up phase, QR-based basis construction, noisy gradient mixing):
+
+| Variant | File | Modification | d=10 | d=100 | Total |
+|---------|------|--------------|------|-------|-------|
+| **ASHGF-2SLV** | `ashgf_2slv.py` | Baseline ASHGF + 2SLV vote | 20 | 13 | 33 |
+| ASHGF-2SLV0 | `ashgf_2slv0.py` | Householder O(d²), no warm-up | 28 | 22 | 50 |
+| ASHGF-2SLVA | `ashgf_2slva.py` | alpha=0 (gradient-subspace only) | 23 | 22 | 45 |
+| ASHGF-2SLV2G | `ashgf_2slv2g.py$ | Dual gradient (ASGF + ASHGF) | 26 | 27 | 53 |
+| ASHGF-2SLV2GD | `ashgf_2slv2gd.py$ | Dual gradient + history decay | 32 | 22 | 54 |
+| ASHGF-2SLV2GA | `ashgf_2slv2ga.py$ | Alternate gradients (ASGF/ASHGF per iter) | 22 | 15 | 37 |
+
+None of the ASHGF variants reach ASGF-2SLV's performance (95 wins).
+The gradient-history framework consistently underperforms ASGF's
+adaptive Householder rotation, regardless of the step-vote mechanism.
 
 ---
 
@@ -359,6 +380,12 @@ The second-best algorithm (ASGF-2SL) achieves 59 wins (37.8%).
 | ASHGF-2F | `ashgf_2f.py$ | ASHGF + 2-step |
 | ASHGF-2FD | `ashgf_2fd.py$ | ASHGF + 2-step with damping |
 | ASHGF-2SMA | `ashgf_2sma.py$ | ASHGF + adaptive momentum |
+| ASHGF-2SLV | `ashgf_2slv.py$ | ASHGF + 2SLV vote |
+| ASHGF-2SLV0 | `ashgf_2slv0.py$ | ASHGF-2SLV with Householder O(d²) |
+| ASHGF-2SLVA | `ashgf_2slva.py$ | ASHGF-2SLV with alpha=0 |
+| ASHGF-2SLV2G | `ashgf_2slv2g.py$ | ASHGF-2SLV with dual-gradient vote |
+| ASHGF-2SLV2GD | `ashgf_2slv2gd.py$ | Dual-gradient + history decay |
+| ASHGF-2SLV2GA | `ashgf_2slv2ga.py$ | Alternating ASGF/ASHGF gradients |
 | ASHGF-2X | `ashgf_2x.py$ | ASHGF-2 ablation |
 | ASHGF-D | `ashgf_d.py$ | ASHGF with damping |
 | ASHGF-NG | `ashgf_ng.py$ | ASHGF without gradient history |
@@ -373,13 +400,13 @@ The second-best algorithm (ASGF-2SL) achieves 59 wins (37.8%).
 Seed 2003, 500 iterations, patience 50, `--jobs 12`.
 
 ```
-Algorithm      d=10  d=100  Total   Win%
-ASGF-2SLV        46     45     91   58.3%
-ASGF-2SL         32     27     59   37.8%
-ASGF-2S          28     28     56   35.9%
-ASGF             15     11     26   16.7%
-GD                4      6     10    6.4%
-ASEBO/SGES        0      0      0    0.0%
+Algorithm         Wins   Win%   vs ASGF
+ASGF-2SLV          95   60.9%   +3.7x
+ASGF-2SL           59   37.8%   +2.3x
+ASGF-2S            56   35.9%   +2.2x
+ASGF               26   16.7%   baseline
+GD                 10    6.4%
+ASEBO/SGES          0    0.0%
 ```
 
 ---
