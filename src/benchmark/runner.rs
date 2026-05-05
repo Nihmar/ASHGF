@@ -2,9 +2,12 @@
 //! and dimensions, collecting results for analysis.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
-use crate::algorithms::base::{OptimizeOptions, Optimizer};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+
+use crate::algorithms::base::{OptimizeOptions, Optimizer, ProgressCallback};
 use crate::benchmark::plot::RunResultWithHistory;
 use crate::functions::{get_function, list_functions, TestFunction};
 use crate::utils::SeededRng;
@@ -33,9 +36,10 @@ pub fn run_benchmarks(
     patience: Option<usize>,
     ftol: Option<f64>,
     n_jobs: usize,
+    quiet: bool,
 ) -> HashMap<usize, Vec<RunResult>> {
     let (results, _) = run_benchmarks_with_history(
-        algorithms, pattern, dimensions, max_iter, seed, patience, ftol, n_jobs,
+        algorithms, pattern, dimensions, max_iter, seed, patience, ftol, n_jobs, quiet,
     );
     results
 }
@@ -56,6 +60,7 @@ pub fn run_benchmarks_with_history(
     patience: Option<usize>,
     ftol: Option<f64>,
     n_jobs: usize,
+    quiet: bool,
 ) -> (HashMap<usize, Vec<RunResult>>, Vec<RunResultWithHistory>) {
     let all_funcs = list_functions();
     let func_names: Vec<&str> = if let Some(pat) = pattern {
@@ -73,6 +78,17 @@ pub fn run_benchmarks_with_history(
         let mut results: HashMap<usize, Vec<RunResult>> = HashMap::new();
         let mut history: Vec<RunResultWithHistory> = Vec::new();
 
+        let multi = if quiet {
+            None
+        } else {
+            Some(MultiProgress::new())
+        };
+
+        let style = ProgressStyle::default_bar()
+            .template("{prefix:.bold} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("##-");
+
         for &dim in dimensions {
             let mut dim_results = Vec::new();
 
@@ -83,14 +99,38 @@ pub fn run_benchmarks_with_history(
                 };
 
                 for (algo_name, algo) in algorithms.iter_mut() {
+                    let pb = multi.as_ref().map(|m| {
+                        let bar = m.add(ProgressBar::new(max_iter as u64));
+                        bar.set_style(style.clone());
+                        bar.set_prefix(format!(
+                            "dim={:<4} {:<25} {:<10}",
+                            dim, func_name, algo_name
+                        ));
+                        bar
+                    });
+
+                    let progress_cb: Option<ProgressCallback> =
+                        pb.as_ref().map(|bar| {
+                            let bar = bar.clone();
+                            Arc::new(move |iter: usize, fval: f64| {
+                                bar.set_position(iter as u64);
+                                bar.set_message(format!("f={:.4e}", fval));
+                            }) as ProgressCallback
+                        });
+
                     let mut rng = SeededRng::new(seed);
                     let options = OptimizeOptions {
                         max_iter,
                         patience,
                         ftol,
+                        progress_cb,
                         ..Default::default()
                     };
                     let result = algo.optimize(&f, dim, None, &options, &mut rng);
+
+                    if let Some(bar) = pb {
+                        bar.finish_and_clear();
+                    }
 
                     let best = result
                         .best_values
@@ -138,18 +178,40 @@ pub fn run_benchmarks_with_history(
 
     let total_tasks = tasks.len();
     let pool_size = n_jobs;
-    tracing::info!(
-        "BENCH | {} tasks ({} algos x {} funcs x {} dims) | workers={}",
-        total_tasks,
-        algorithms.len(),
-        func_names.len(),
-        dimensions.len(),
-        pool_size,
-    );
+    if quiet {
+        tracing::info!(
+            "BENCH | {} tasks ({} algos x {} funcs x {} dims) | workers={}",
+            total_tasks,
+            algorithms.len(),
+            func_names.len(),
+            dimensions.len(),
+            pool_size,
+        );
+    }
 
     // Thread-safe result collectors
     let results: Mutex<HashMap<usize, Vec<RunResult>>> = Mutex::new(HashMap::new());
     let history: Mutex<Vec<RunResultWithHistory>> = Mutex::new(Vec::new());
+
+    // ---- TUI setup ----
+    let multi = if quiet {
+        None
+    } else {
+        Some(MultiProgress::new())
+    };
+    let completed = Arc::new(AtomicUsize::new(0));
+
+    let overall_pb = multi.as_ref().map(|m| {
+        let pb = m.add(ProgressBar::new(total_tasks as u64));
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{prefix:.bold} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .unwrap()
+                .progress_chars("##-"),
+        );
+        pb.set_prefix("Benchmark");
+        pb
+    });
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(pool_size)
@@ -164,8 +226,27 @@ pub fn run_benchmarks_with_history(
                 let algo_name = task.0.clone();
                 let func_name = task.1.clone();
                 let dim = task.2;
+                let pb = overall_pb.clone();
+                let completed = Arc::clone(&completed);
+
+                let label = format!(
+                    "dim={:<4} {:<25} {:<10}",
+                    dim, func_name, algo_name
+                );
 
                 s.spawn(move |_| {
+                    let progress_cb: Option<ProgressCallback> =
+                        pb.as_ref().map(|bar| {
+                            let bar = bar.clone();
+                            let label = label.clone();
+                            Arc::new(move |iter: usize, fval: f64| {
+                                bar.set_message(format!(
+                                    "{} | iter {}/{} f={:.4e}",
+                                    label, iter, max_iter, fval
+                                ));
+                            }) as ProgressCallback
+                        });
+
                     let f: TestFunction = match get_function(&func_name) {
                         Some(f) => f,
                         None => return,
@@ -190,6 +271,7 @@ pub fn run_benchmarks_with_history(
                         max_iter,
                         patience,
                         ftol,
+                        progress_cb,
                         ..Default::default()
                     };
                     let result = algo.optimize(&f, dim, None, &options, &mut rng);
@@ -225,6 +307,12 @@ pub fn run_benchmarks_with_history(
                     drop(res);
 
                     history.lock().unwrap().push(hist_entry);
+
+                    // Update overall progress
+                    let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                    if let Some(ref bar) = pb {
+                        bar.set_position(done as u64);
+                    }
                 });
             }
         });

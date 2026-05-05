@@ -9,6 +9,7 @@ use ashgf::algorithms::{
     Asgf2s, Asgf2sw, OptimizeOptions, Optimizer, ASEBO, ASGF, ASHGF, ASHGFNG, ASHGFS, GD, SGES,
 };
 use ashgf::benchmark::plot::{plot_comparison_bars, plot_convergence_grid, plot_per_function};
+use ashgf::benchmark::report::generate_report;
 use ashgf::benchmark::runner::run_benchmarks_with_history;
 use ashgf::cli::args::{AlgoName, Cli, Command};
 use ashgf::functions::{get_function, list_functions};
@@ -264,11 +265,13 @@ fn run(cli: Cli) -> i32 {
                 algorithms.push(("ASEBO", &mut asebo));
             }
 
-            tracing::info!(
-                "Benchmark: {} algos × {} dims",
-                algorithms.len(),
-                dims.len()
-            );
+            if args.quiet {
+                tracing::info!(
+                    "Benchmark: {} algos × {} dims",
+                    algorithms.len(),
+                    dims.len()
+                );
+            }
 
             let (results, history) = run_benchmarks_with_history(
                 &mut algorithms,
@@ -279,6 +282,7 @@ fn run(cli: Cli) -> i32 {
                 args.patience,
                 args.ftol,
                 args.jobs,
+                args.quiet,
             );
 
             // Organise output: one subdirectory per dimension
@@ -367,6 +371,10 @@ fn run(cli: Cli) -> i32 {
                     );
                 }
             }
+
+            // Generate REPORT.md
+            let all_results: Vec<_> = results.values().flatten().cloned().collect();
+            generate_report(&all_results, &dims, args.seed, args.iter, output_dir);
 
             println!("\nAll results saved under {}/dim_*/", output_dir.display());
 

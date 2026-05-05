@@ -4,6 +4,8 @@
 //! a default `optimize` method that calls `grad_estimator`, `step_size`,
 //! and optional hooks `setup` / `post_iteration`.
 
+use std::sync::Arc;
+
 use ndarray::Array1;
 
 use crate::utils::SeededRng;
@@ -12,8 +14,11 @@ use crate::utils::SeededRng;
 // Shared types
 // ---------------------------------------------------------------------------
 
+/// Progress callback: `(iteration, current_f_value)`.
+pub type ProgressCallback = Arc<dyn Fn(usize, f64) + Send + Sync>;
+
 /// Options shared by all optimisers.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OptimizeOptions {
     /// Maximum number of iterations.
     pub max_iter: usize,
@@ -29,6 +34,8 @@ pub struct OptimizeOptions {
     /// Number of parallel threads for function evaluation.
     /// 0 = use rayon global default (typically number of CPU cores).
     pub n_jobs: usize,
+    /// Optional callback for progress reporting (iteration, f_value).
+    pub progress_cb: Option<ProgressCallback>,
 }
 
 impl Default for OptimizeOptions {
@@ -40,7 +47,22 @@ impl Default for OptimizeOptions {
             ftol: None,
             log_interval: 50,
             n_jobs: 0,
+            progress_cb: None,
         }
+    }
+}
+
+impl std::fmt::Debug for OptimizeOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OptimizeOptions")
+            .field("max_iter", &self.max_iter)
+            .field("maximize", &self.maximize)
+            .field("patience", &self.patience)
+            .field("ftol", &self.ftol)
+            .field("log_interval", &self.log_interval)
+            .field("n_jobs", &self.n_jobs)
+            .field("progress_cb", &self.progress_cb.as_ref().map(|_| ".."))
+            .finish()
     }
 }
 
@@ -163,31 +185,39 @@ pub trait Optimizer {
         // ---- Hook: setup ----
         self.setup(f, dim, &x);
 
-        tracing::info!(
-            "START | algo={} | dim={} | max_iter={} | f0={:.6e}",
-            self.kind(),
-            dim,
-            options.max_iter,
-            current_val,
-        );
+        if options.progress_cb.is_none() {
+            tracing::info!(
+                "START | algo={} | dim={} | max_iter={} | f0={:.6e}",
+                self.kind(),
+                dim,
+                options.max_iter,
+                current_val,
+            );
+        }
 
         let mut actual_iter: usize = 0;
 
         for i in 1..=options.max_iter {
             if i % options.log_interval == 0 {
                 let last_val = all_values.last().copied().unwrap_or(f64::NAN);
-                let gap = if best_value.is_finite() && last_val.is_finite() {
-                    (last_val - best_value).abs()
+                if options.progress_cb.is_some() {
+                    if let Some(ref cb) = options.progress_cb {
+                        cb(i, last_val);
+                    }
                 } else {
-                    0.0
-                };
-                tracing::info!(
-                    "{:>5} | f={:.6e} | best={:.6e} | gap={:.2e}",
-                    i,
-                    last_val,
-                    best_value,
-                    gap,
-                );
+                    let gap = if best_value.is_finite() && last_val.is_finite() {
+                        (last_val - best_value).abs()
+                    } else {
+                        0.0
+                    };
+                    tracing::info!(
+                        "{:>5} | f={:.6e} | best={:.6e} | gap={:.2e}",
+                        i,
+                        last_val,
+                        best_value,
+                        gap,
+                    );
+                }
             }
 
             // 1. Estimate gradient
@@ -246,11 +276,13 @@ pub trait Optimizer {
                     }
 
                     if stall_count >= patience {
-                        tracing::info!(
-                            "STALL | iter={} | no improvement for {} iters",
-                            i,
-                            patience,
-                        );
+                        if options.progress_cb.is_none() {
+                            tracing::info!(
+                                "STALL | iter={} | no improvement for {} iters",
+                                i,
+                                patience,
+                            );
+                        }
                         break;
                     }
                 }
@@ -262,7 +294,9 @@ pub trait Optimizer {
                     .mapv(|v| v.abs())
                     .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
                 if max_step < eps {
-                    tracing::info!("CONV | iter={} | step < eps", i);
+                    if options.progress_cb.is_none() {
+                        tracing::info!("CONV | iter={} | step < eps", i);
+                    }
                     break;
                 }
             }
@@ -283,13 +317,15 @@ pub trait Optimizer {
         } else {
             "max_iter"
         };
-        tracing::info!(
-            "DONE | iter={} | f={:.6e} | best={:.6e} | {}",
-            total_iter,
-            last_val,
-            best_value,
-            status,
-        );
+        if options.progress_cb.is_none() {
+            tracing::info!(
+                "DONE | iter={} | f={:.6e} | best={:.6e} | {}",
+                total_iter,
+                last_val,
+                best_value,
+                status,
+            );
+        }
 
         let converged = actual_iter < options.max_iter;
         OptimizeResult {
