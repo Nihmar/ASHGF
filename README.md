@@ -299,8 +299,6 @@ The key insight from extensive benchmarking: rather than *predicting* which
 step direction (isotropic vs. anisotropic) is better, **evaluate both** and
 pick the best that passes the safety gate.
 
-**ASGF-2SLV** — "try both, pick best":
-
 $$\text{Candidates} = \begin{cases}
 x^{\text{uni}} = x_t - k \alpha_t \hat{g}_t, & k = 1 + c_t \\[4pt]
 x^{\text{ani}} = x_t - \text{diag}(k^{\text{ani}}) \alpha_t \hat{g}_t, &
@@ -318,19 +316,23 @@ If no candidate passes, the base step $x_t^{\text{base}}$ is returned.
 Cost: 2 extra function evaluations per confident iteration (one for uniform,
 one for anisotropic) vs. 1 for plain 2S.
 
-**Benchmark result**: 95 / 156 wins (60.9%) across 78 test functions
-at dimensions 10 and 100, using seed 2003, 500 iterations, patience 50.
-The second-best algorithm (ASGF-2SL) achieves 59 wins (37.8%).
+**ASGF-2SLVK** adds a vote-accelerated sigma decay: when the 2SLV vote accepts a
+big step (indicating a reliable gradient direction), a gentle extra decay
+$\sigma \gets \gamma_\kappa \sigma$ (with $\gamma_\kappa = 0.98$) is applied.
+Convergence accelerates without sacrificing final accuracy.
 
 | Variant | File | Modification | Cost | Wins |
 |---------|------|--------------|------|------|
-| **2SLV** | `asgf_2slv.py` | Baseline vote: uniform + aniso | +2 eval | **95 (60.9%)** |
-| 2SLV2 | `asgf_2slv2.py` | Triple candidate (+ sqrt) | +3 eval | 69 (44.2%) |
-| 2SLVP | `asgf_2slvp.py` | Persistence bias | +2 eval | 77 (49.4%) |
+| **2SLVK** | `asgf_2slvk.py` | Vote-accelerated sigma decay | +2 eval | **96 (61.5%)** |
+| 2SLV | `asgf_2slv.py` | Baseline vote: uniform + aniso | +2 eval | 88 (56.4%) |
+| 2SLVC | `asgf_2slvc.py` | Conditional sqrt candidate | +2-3 eval | 87 (55.8%) |
+| 2SLVM | `asgf_2slvm.py` | Improvement-magnitude memory | +2 eval | 87 (55.8%) |
 | 2SLVS | `asgf_2slvs.py` | Spread-conditioned bonus | +2 eval | 79 (50.6%) |
-| 2SLV2P | `asgf_2slv2p.py` | Triple + persistence | +3 eval | 66 (42.3%) |
-| 2SLV2S | `asgf_2slv2s.py` | Triple + spread | +3 eval | 69 (44.2%) |
+| 2SLVP | `asgf_2slvp.py` | Persistence bias | +2 eval | 77 (49.4%) |
 | 2SLVPS | `asgf_2slvps.py` | Persistence + spread | +2 eval | 77 (49.4%) |
+| 2SLV2 | `asgf_2slv2.py` | Triple candidate (+ sqrt) | +3 eval | 69 (44.2%) |
+| 2SLV2S | `asgf_2slv2s.py` | Triple + spread | +3 eval | 69 (44.2%) |
+| 2SLV2P | `asgf_2slv2p.py` | Triple + persistence | +3 eval | 66 (42.3%) |
 | 2SLV2PS | `asgf_2slv2ps.py$ | Triple + persistence + spread | +3 eval | 66 (42.3%) |
 
 ---
@@ -390,6 +392,9 @@ adaptive Householder rotation, regardless of the step-vote mechanism.
 | ASHGF-D | `ashgf_d.py$ | ASHGF with damping |
 | ASHGF-NG | `ashgf_ng.py$ | ASHGF without gradient history |
 | ASHGF-S | `ashgf_s.py$ | ASHGF simplified |
+| ASGF-2SLVC | `asgf_2slvc.py$ | Conditional sqrt candidate (spread-gated) |
+| ASGF-2SLVK | `asgf_2slvk.py$ | Vote-accelerated sigma decay |
+| ASGF-2SLVM | `asgf_2slvm.py$ | Improvement-magnitude memory |
 
 ---
 
@@ -401,7 +406,8 @@ Seed 2003, 500 iterations, patience 50, `--jobs 12`.
 
 ```
 Algorithm         Wins   Win%   vs ASGF
-ASGF-2SLV          95   60.9%   +3.7x
+ASGF-2SLVK         96   61.5%   +3.7x
+ASGF-2SLV          88   56.4%   +3.4x
 ASGF-2SL           59   37.8%   +2.3x
 ASGF-2S            56   35.9%   +2.2x
 ASGF               26   16.7%   baseline
