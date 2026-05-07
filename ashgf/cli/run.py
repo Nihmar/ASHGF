@@ -301,6 +301,12 @@ def build_parser() -> argparse.ArgumentParser:
     bench_parser.add_argument(
         "--quiet", action="store_true", help="Suppress per-run output"
     )
+    bench_parser.add_argument(
+        "--per-function-plots",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Generate per-function convergence plots (default: enabled)",
+    )
 
     # ---- stats command ----
     stats_parser = subparsers.add_parser(
@@ -470,10 +476,13 @@ def main(argv: list[str] | None = None) -> int:
 
                 # Per-dimension per-function plots
                 per_func_dir = os.path.join(dim_dir, "per_function")
-                saved = (
-                    _safe_plot(plot_per_function, wrapped, output_dir=per_func_dir)
-                    or []
-                )
+                if args.per_function_plots:
+                    saved = (
+                        _safe_plot(plot_per_function, wrapped, output_dir=per_func_dir)
+                        or []
+                    )
+                else:
+                    saved = []
 
                 # Per-dimension comparison bars
                 bar_path = os.path.join(dim_dir, "comparison_bars.png")
@@ -555,10 +564,13 @@ def main(argv: list[str] | None = None) -> int:
 
             # Auto-save one PNG PER FUNCTION (detailed convergence: dims x algos)
             per_func_dir = os.path.join(output_dir, "per_function")
-            saved = (
-                _safe_plot(plot_per_function, wrapped, output_dir=per_func_dir) or []
-            )
-            print(f"\nGenerated {len(saved)} per-function plots in {per_func_dir}/")
+            if args.per_function_plots:
+                saved = (
+                    _safe_plot(plot_per_function, wrapped, output_dir=per_func_dir) or []
+                )
+                print(f"\nGenerated {len(saved)} per-function plots in {per_func_dir}/")
+            else:
+                print()
 
             if args.plot:
                 _safe_plot(
