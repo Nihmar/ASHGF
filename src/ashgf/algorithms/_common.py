@@ -43,6 +43,10 @@ class BaseRunConfig:
         Seed for the single run-level RNG.
     eps:
         Termination tolerance on ``||x_{i+1} - x_i||_2``.
+    rng:
+        Optional explicit random source (any object exposing ``standard_normal``
+        and ``random``, e.g. ``np.random.Generator`` or ``np.random.RandomState``);
+        takes precedence over ``seed``. Used for legacy-stream parity studies.
     x_init:
         Optional starting point; drawn from N(0, I_d) when omitted.
     maximize:
@@ -55,6 +59,9 @@ class BaseRunConfig:
     maxiter: int
     seed: int
     eps: float = 1e-8
+    rng: np.random.Generator | np.random.RandomState | None = field(
+        default=None, compare=False, repr=False
+    )
     x_init: NDArray[np.float64] | None = None
     maximize: bool = False
 
@@ -237,10 +244,11 @@ def gram_schmidt_complete(
 
 def build_context(
     config: BaseRunConfig,
-) -> tuple[str, CountingFunction, np.random.Generator]:
+) -> tuple[str, CountingFunction, np.random.Generator | np.random.RandomState]:
     """Resolve the objective wrapper and the single run-level RNG."""
     name, f = make_objective(config.function)
-    return name, f, np.random.default_rng(config.seed)
+    rng = config.rng if config.rng is not None else np.random.default_rng(config.seed)
+    return name, f, rng
 
 
 def drive_run(
