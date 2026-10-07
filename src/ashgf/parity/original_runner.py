@@ -74,6 +74,7 @@ class OriginalRecord:
     total_function_evaluations: int
     wall_time_seconds: float
     terminated_normally: bool  # False if the prototype aborted on an internal error
+    fes_per_iterate: tuple[int, ...] | None  # exact cumulative FEs aligned with values
 
 
 def _original_dir() -> Path:
@@ -181,6 +182,7 @@ def run_original(
 
     counter = {"n": 0}
     stream: list[float] = []
+    grad_counts: list[int] = []
     original_evaluate = mod.Function.evaluate
 
     def counting_evaluate(self, x) -> float:
@@ -194,6 +196,17 @@ def run_original(
     buffer = io.StringIO()
     try:
         instance = cls(**params)
+        # Every completed iteration calls grad_estimator exactly once and evaluates
+        # the new point once afterwards, so snapshotting the evaluation count right
+        # after each grad_estimator call yields the exact cumulative FE per iterate.
+        original_grad = instance.grad_estimator
+
+        def counting_grad(*args: object, **kwargs: object):
+            result = original_grad(*args, **kwargs)
+            grad_counts.append(counter["n"])
+            return result
+
+        instance.grad_estimator = counting_grad
         with contextlib.redirect_stdout(buffer):
             _, returned_values = instance.optimize(
                 function=function, dim=dim, it=it, x_init=x_init, debug=False
@@ -213,6 +226,12 @@ def run_original(
     if terminated_normally and len(stream) > len(values):
         values.append(stream[-1])
     best_value = min(values)
+
+    fes: tuple[int, ...] | None = None
+    if len(grad_counts) == len(values) - 1:
+        candidate = [1] + [c + 1 for c in grad_counts]
+        if candidate[-1] == counter["n"]:
+            fes = tuple(candidate)
     return OriginalRecord(
         algorithm=algorithm,
         function=function,
@@ -224,4 +243,5 @@ def run_original(
         total_function_evaluations=counter["n"],
         wall_time_seconds=wall_time,
         terminated_normally=terminated_normally,
+        fes_per_iterate=fes,
     )
