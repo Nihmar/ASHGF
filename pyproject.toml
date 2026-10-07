@@ -19,6 +19,8 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.8",
+    # Required to import the frozen prototype's asebo.py in parity tests.
+    "scikit-learn>=1.5",
 ]
 
 [build-system]
