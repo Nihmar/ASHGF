@@ -1,6 +1,6 @@
 # Project Plan — ASHGF Reimplementation
 
-Status: active. Last updated: 2026-07-07.
+Status: active. Last updated: 2026-10-07.
 
 This document tracks the plan to build a production-quality Python implementation of the
 algorithms in the master's thesis *"Adaptive Stochastic Historical Gradient-Free Optimization"*
@@ -61,6 +61,9 @@ Branches: `docs/save-plan` (this file + AGENTS.md audit fixes), then `feat/proje
   - FE count exact: `dim·(m−1)+1` evaluations per ASGF/ASHGF iteration.
 
 ### Phase 2 — Algorithms (`feat/algorithms-*`)
+
+**Status (2026-10-07):** all five algorithms implemented and tested (determinism, exact FE
+accounting, mathematical invariants); awaiting parity harness in Phase 3.
 
 Dataclass-based implementation, one module per algorithm under `src/ashgf/algorithms/`:
 
