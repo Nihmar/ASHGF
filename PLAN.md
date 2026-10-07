@@ -118,12 +118,44 @@ Planned extension: dims {10, 100, 1000} move to Phase 4 (thesis replication grid
 
 ### Phase 4 — Thesis replication (`feat/thesis-replication`)
 
-- Reproduce `numericalexperiments.tex`: dims `{10, 100, 1000}`, the ~28 starred functions in
-  `original_python_code/functions.txt`, 10 fixed seeds `[6177, 2832, 7361, 2778, 5416, 9652, 125,
-  978, 1487, 4156]`, FE budgets up to 1e8, tolerances τ ∈ {1e-2 … 1e-10}.
-- More & Sugrue performance/data profiles for GD, SGES, ASEBO, ASGF, ASHGF — both implementations.
-- Report `comparisons/<date>-thesis-replication/report.md` with figures; document any deviations
-  between reproduced figures and the thesis originals.
+**Status (2026-10-07):** protocol fully reconstructed from the frozen code
+(`original_python_code/profiles.py` + `notebook_profiles.ipynb`); driver implemented at
+`tools/run_thesis_replication.py`; full grid not yet executed.
+
+Reconstructed protocol (supersedes earlier guess of 10 fixed seeds):
+
+* single trajectory per (function, dim, solver) cell, up to `it = 10000` iterations,
+  early stop `||x_{i+1} - x_i|| < 1e-8`;
+* every original constructor defaults to `seed = 2003`; each run re-seeds the global
+  legacy MT19937 stream, so all runs of a given dimension share the start point
+  `np.random.seed(2003); np.random.randn(dim)`;
+* constructor hyperparameters: GD/SGES/ASEBO `(lr=1e-4, sigma=1e-4)`, ASGF/ASHHF class
+  defaults; dims `{10, 100, 1000}`; budgets `mu_L ∈ {1e4 … 1e8}`; tolerances
+  `tau ∈ {1e-2 … 1e-10}`; alpha grids: performance `[1.0, 1.2, …, 3.0]`, data
+  `[0, 50, …, 950]`.
+* The notebook derives profiles offline from stored descent curves with an idealized
+  FE model: `1 + 2d` FEs/iteration for GD/SGES/ASEBO, `1 + 4d` for ASGF/ASHHF
+  (m = 5 GH nodes, center node reused). Our driver stores *exact* cumulative FEs per
+  iterate instead, which is equivalent for canonical solvers (constant per-iteration
+  cost matching the model) and strictly more accurate where the prototype deviates
+  (ASEBO warm-up).
+
+Driver design (data layout under `comparisons/<date>-thesis-replication/`):
+
+* one `.npz` per run in flat directories `data/{new|old}/dim{d}__{func}__{solver}.npz`
+  (values + exact cumulative fes + run metadata) plus a single append-only
+  `data/manifest.csv` index — compact, resume-safe, tidy overview;
+* three independent phases (`runs`, `profiles`, `report`) so expensive executions are
+  done once and profile analysis can be re-run freely; figures use the thesis' exact
+  naming `performance_profile_{dim}_{mu}_{tau}.png` / `data_profile_…`;
+* frozen side reproduces the thesis exactly (no external start point, internal RNG
+  stream untouched); new side starts from the same MT19937 vector with canonical
+  PCG64 direction streams; frozen side limited to dims ≤ 100 (scalar loops; guidance
+  machinery unexecutable on modern NumPy anyway).
+
+Remaining work: execute the full grid (dominated by dim 1000 × 26 functions × 5 solvers
+on the new side), review coverage gaps, write final report comparing reproduced figures
+against the thesis originals.
 
 ## Key decisions
 
@@ -138,6 +170,7 @@ Planned extension: dims {10, 100, 1000} move to Phase 4 (thesis replication grid
 
 ## Immediate next steps
 
-1. Merge `feat/comparison-harness` (parity adapter, parity tests, basics comparison report).
-2. `feat/thesis-replication`: reproduce `numericalexperiments.tex` (dims {10, 100, 1000}, starred
-   function set, fixed seed list, More & Sugrue profiles) and document deviations.
+1. ~~Merge `feat/comparison-harness`~~ — done (PR #5).
+2. `feat/thesis-replication`: run the full grid with `tools/run_thesis_replication.py`
+   (protocol reconstructed; see Phase 4 notes), then compare reproduced figures against the
+   thesis originals and document deviations.

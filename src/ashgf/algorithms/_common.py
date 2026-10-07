@@ -85,6 +85,10 @@ class RunResult:
         Array of shape ``(n_iters + 1, dim)``; row ``i`` is ``x_i``.
     values:
         Array of shape ``(n_iters + 1,)``; entry ``i`` is ``F(x_i)``.
+    fes_per_iterate:
+        Cumulative function-evaluation count aligned with ``values``; entry ``i`` is
+        the number of objective evaluations performed up to and including ``F(x_i)``.
+        Enables More & Sugrue performance/data profiles directly from the trajectory.
     best_index:
         Index of the iterate with the best-so-far value (min or max per config).
     total_function_evaluations:
@@ -99,6 +103,7 @@ class RunResult:
     dim: int
     iterates: NDArray[np.float64]
     values: NDArray[np.float64]
+    fes_per_iterate: NDArray[np.int64]
     best_index: int
     total_function_evaluations: int
     wall_time_seconds: float
@@ -288,6 +293,7 @@ def drive_run(
 
     values = [float(f(x))]
     iterates = [x.copy()]
+    fes = [f.n_evaluations]
     best_index = 0
 
     t0 = time.perf_counter()
@@ -295,6 +301,7 @@ def drive_run(
         x_new, v_new = step_fn(i, x, values[i])
         values.append(v_new)
         iterates.append(x_new)
+        fes.append(f.n_evaluations)
         better = v_new < values[best_index] if not config.maximize else v_new > values[best_index]
         if better:
             best_index = len(values) - 1
@@ -308,6 +315,7 @@ def drive_run(
         dim=config.dim,
         iterates=np.stack(iterates, axis=0),
         values=np.asarray(values, dtype=np.float64),
+        fes_per_iterate=np.asarray(fes, dtype=np.int64),
         best_index=best_index,
         total_function_evaluations=f.n_evaluations,
         wall_time_seconds=wall_time,

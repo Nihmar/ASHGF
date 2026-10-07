@@ -33,6 +33,16 @@ from ashgf.functions import (
     Function,
     get_function,
 )
+from ashgf.profiles import (
+    ALPHA_GRID_DATA,
+    ALPHA_GRID_PERFORMANCE,
+    Trajectory,
+    convergence_fe,
+    data_profile,
+    ideal_iterations,
+    performance_profile,
+    solve_cell,
+)
 from ashgf.quadrature import DGSEstimate, GHQuadrature, dgs_gradient_estimate
 
 __all__ = [
@@ -42,6 +52,14 @@ __all__ = [
     "CountingFunction",
     "Function",
     "get_function",
+    "ALPHA_GRID_DATA",
+    "ALPHA_GRID_PERFORMANCE",
+    "Trajectory",
+    "convergence_fe",
+    "data_profile",
+    "ideal_iterations",
+    "performance_profile",
+    "solve_cell",
     "DGSEstimate",
     "GHQuadrature",
     "dgs_gradient_estimate",
