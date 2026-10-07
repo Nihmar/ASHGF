@@ -9,6 +9,22 @@ prototype are documented in ``comparisons/``.
 
 __version__ = "0.1.0"
 
+from ashgf.algorithms import (
+    ASEBO,
+    ASGF,
+    ASHGF,
+    GD,
+    SGES,
+    ASEBOConfig,
+    ASGFConfig,
+    ASHGFConfig,
+    BaseRunConfig,
+    GDConfig,
+    RandomSearch,
+    RandomSearchConfig,
+    RunResult,
+    SGESConfig,
+)
 from ashgf.functions import (
     FUNCTION_NAMES,
     LEGACY_VARIANTS,
@@ -29,4 +45,18 @@ __all__ = [
     "DGSEstimate",
     "GHQuadrature",
     "dgs_gradient_estimate",
+    "BaseRunConfig",
+    "RunResult",
+    "GD",
+    "GDConfig",
+    "RandomSearch",
+    "RandomSearchConfig",
+    "SGES",
+    "SGESConfig",
+    "ASEBO",
+    "ASEBOConfig",
+    "ASGF",
+    "ASGFConfig",
+    "ASHGF",
+    "ASHGFConfig",
 ]

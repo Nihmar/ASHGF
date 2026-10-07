@@ -113,7 +113,13 @@ class DGSEstimate:
     gradient: NDArray[np.float64]                 # full gradient estimate, shape (d,)
     directional_derivatives: NDArray[np.float64]  # per-direction estimates D̃_j, shape (d,)
     lipschitz_constants: NDArray[np.float64]      # local Lipschitz constants L_j, shape (d,)
+    directional_values: NDArray[np.float64]       # raw evaluations V[k, j] = F(x + s p_k ξ_j)
     n_function_evaluations: int                   # objective calls made by this call
+
+
+def get_quadrature_rule(m: int) -> GHQuadrature:
+    """Convenience wrapper around :meth:`GHQuadrature.of_order` for algorithm configs."""
+    return GHQuadrature.of_order(m)
 
 
 def dgs_gradient_estimate(
@@ -152,8 +158,9 @@ def dgs_gradient_estimate(
     Returns
     -------
     DGSEstimate
-        Gradient, per-direction derivatives, local Lipschitz constants and the number of
-        objective evaluations performed by this call.
+        Gradient, per-direction derivatives, local Lipschitz constants, the raw
+        per-direction evaluation matrix and the number of objective evaluations
+        performed by this call.
     """
     x = np.asarray(x, dtype=np.float64)
     basis = np.asarray(basis, dtype=np.float64)
@@ -173,6 +180,7 @@ def dgs_gradient_estimate(
     center = quad.center_index
     derivs = np.empty(dim)
     lip = np.zeros(dim)
+    values_all = np.empty((m, dim))
     n_fes = 0
 
     if quad.has_center_node:
@@ -205,6 +213,7 @@ def dgs_gradient_estimate(
 
         # Per-direction derivative estimates: D̃_j = Σ_k q_k V[k, j].
         derivs[start:stop] = values.T @ q
+        values_all[:, start:stop] = values
 
         # Local Lipschitz constants over admissible pairs I.
         for a, b in quad.pairs:
@@ -220,5 +229,6 @@ def dgs_gradient_estimate(
         gradient=gradient,
         directional_derivatives=derivs,
         lipschitz_constants=lip,
+        directional_values=values_all,
         n_function_evaluations=n_fes,
     )
