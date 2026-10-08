@@ -48,6 +48,7 @@ Note: `thesis/chapters/thealgorithm - Copia.tex` is an unreferenced stale copy (
 3. **Algorithms** — dataclass-based implementations of GD (random-search baseline), SGES, ASEBO, ASGF, ASHGF faithful to the thesis, with explicit `np.random.Generator`s, exact FE counting, structured `RunResult` records (trajectory, FEs, best-so-far) ready for More & Sugrue profiles.
 4. **Parity & comparison harness** — port the frozen original into its own legacy env; parity tests where behavior must match; speedup/correctness benchmarks landing in `comparisons/`.
 5. **Thesis replication** — reproduce the numerical-experiments chapter (dims 10/100/1000, selected functions, 10 seeds, performance/data profiles) with both implementations side by side.
+6. **GPU acceleration** (planned, after 5) — C/C++ core with HIP/ROCm kernels delegating matrix operations to the GPU, behind the existing Python API; the numpy CPU path stays the reference. Staged plan in `PLAN.md` (Phase 5).
 
 ## Workflow
 

@@ -1,6 +1,6 @@
 # Project Plan — ASHGF Reimplementation
 
-Status: active. Last updated: 2026-10-07.
+Status: active. Last updated: 2026-10-08.
 
 This document tracks the plan to build a production-quality Python implementation of the
 algorithms in the master's thesis *"Adaptive Stochastic Historical Gradient-Free Optimization"*
@@ -118,9 +118,12 @@ Planned extension: dims {10, 100, 1000} move to Phase 4 (thesis replication grid
 
 ### Phase 4 — Thesis replication (`feat/thesis-replication`)
 
-**Status (2026-10-07):** protocol fully reconstructed from the frozen code
+**Status (2026-10-08):** protocol fully reconstructed from the frozen code
 (`original_python_code/profiles.py` + `notebook_profiles.ipynb`); driver implemented at
-`tools/run_thesis_replication.py`; full grid not yet executed.
+`tools/run_thesis_replication.py` and extended with `--all-functions` (entire canonical
+catalog, 78 functions) and `--workers` (thread-parallel runs phase); the full-catalog grid
+is launched in stages by `tools/launch_full_grid.sh` into
+`comparisons/<date>-full-grid/`.
 
 Reconstructed protocol (supersedes earlier guess of 10 fixed seeds):
 
@@ -153,9 +156,68 @@ Driver design (data layout under `comparisons/<date>-thesis-replication/`):
   PCG64 direction streams; frozen side limited to dims ≤ 100 (scalar loops; guidance
   machinery unexecutable on modern NumPy anyway).
 
-Remaining work: execute the full grid (dominated by dim 1000 × 26 functions × 5 solvers
-on the new side), review coverage gaps, write final report comparing reproduced figures
-against the thesis originals.
+Scope decision (2026-10-08): per explicit request the grid covers the **entire canonical
+function catalog**, not just the 26 starred functions. Staged launch:
+
+* Stage A — all 78 functions x dims {10, 100} x both sides (~1560 cells);
+* Stage B — 26 starred functions x dim 1000 x new side;
+* non-starred dim-1000 cells deferred until the ASEBO eigenstep optimization lands
+  (two full `eigh(1000)` per iteration make ASEBO dim-1000 cells ~1 s/iter today,
+  ~2.8 h/cell at max budget — the long pole of the grid); they will be added later with
+  `--phase runs --side new --dims 1000 --all-functions` (resume-safe).
+
+Measured cell costs used for scheduling: frozen side dim 100 ≈ 0.1–47 s/cell (SGES aborts
+instantly under NumPy ≥ 2; ASGF/GD grind to the full budget when diverging); new side
+dim 1000 ≈ 0.25–0.35 s/iter for ASGF/ASHHF worst case. Expected wall time with 3 workers
+on the shared 12-core box: Stage A ≈ 1–2 days, Stage B ≈ 1–2 days.
+
+Remaining work: monitor stage logs and manifest statuses, add the deferred dim-1000
+non-starred cells after the ASEBO perf fix, review coverage gaps, write final report
+comparing reproduced figures against the thesis originals.
+
+### Phase 5 — GPU acceleration via C + HIP/ROCm (planned, not started)
+
+**Motivation (measured 2026-10-08, CPU):** per-iteration costs that dominate high-dim runs:
+
+| Operation | dim 100 | dim 1000 |
+|---|---|---|
+| `gram_schmidt_complete` (sequential Python MGS) | ~6 ms | ~805 ms |
+| batched projection + reduced QR completion | ~16 ms | ~279 ms |
+| blocked (GEMM-batched) MGS completion | ~7 ms | ~163 ms |
+| batched objective eval throughput (sphere / Ackley) | — | 471 / 47 M points·s⁻¹ |
+
+At dim 1000 a full-length ASGF/ASHGF cell (10 000 iterations) spends most of its wall time
+in basis completion and large dense linear algebra on CPU. The plan is to rewrite the hot
+numerical core in **C/C++ with HIP kernels (AMD ROCm)**, delegating all matrix operations
+to the GPU while keeping the Python package as the orchestration layer and the single source
+of truth for FE accounting, configs, and result records.
+
+Staged outline:
+
+1. **Hotspot inventory & kernel spec.** Final profile-driven list of GPU-bound kernels:
+   batched benchmark evaluations (elementwise ops + reductions); central-difference gradient
+   assembly (`diff @ directions`, GEMV/GEMM); DGS estimator (batched evals + weighted sums);
+   orthonormal completion (blocked Gram–Schmidt / `dgeqrf` via rocBLAS); subspace bases
+   (`gesvd`/`syevd` via rocSOLVER for SGES/ASEBO/ASHGF history).
+2. **Architecture.** Thin C++ core exposing device arrays through pybind11/nanobind bindings;
+   existing dataclass API (`RunConfig`, `RunResult`) unchanged; explicit device selection with
+   the current numpy path kept as the always-available CPU reference (auto-fallback when no
+   ROCm device is present). One `curand`/host-seeded stream per run, preserving the
+   "explicit generator, no global seeding" rule.
+3. **Correctness gate.** Bit-close parity tests vs the CPU implementation per kernel
+   (tolerance-scaled), then trajectory-level agreement within solver tolerance before any
+   comparison numbers are taken from the GPU path.
+4. **Acceptance.** Orders-of-magnitude speedup targets at dim ≥ 1000 measured in
+   `comparisons/`; More & Sugrue profiles identical (same FEs, same trajectories modulo
+   floating-point tolerance).
+
+Risks / open questions: ROCm toolchain availability on target hardware; development cost of
+maintaining dual CPU/GPU paths (mitigated by keeping the CPU path canonical); memory-bandwidth
+limits for many small vectors (direction matrices are `(d, d)` — fine at d ≤ 1000); whether to
+port only the new-side algorithms (frozen prototype stays CPU-only by definition).
+
+Prerequisite: finish Phase 4 first, so baseline CPU timings and thesis-reproduced figures exist
+for the speedup claims.
 
 ## Key decisions
 
@@ -167,10 +229,23 @@ against the thesis originals.
   as in the original; kept out of the fast CI path (slow, stochastic).
 - **Naming**: public names follow the thesis tables; "GD" stays (it is the random-search baseline,
   clarified in docstrings).
+- **GPU strategy (Phase 5)**: C/C++ + HIP core behind the existing Python API; the numpy CPU
+  path remains the reference implementation and default fallback; GPU results must pass
+  kernel-level parity tests before use.
 
 ## Immediate next steps
 
 1. ~~Merge `feat/comparison-harness`~~ — done (PR #5).
-2. `feat/thesis-replication`: run the full grid with `tools/run_thesis_replication.py`
-   (protocol reconstructed; see Phase 4 notes), then compare reproduced figures against the
-   thesis originals and document deviations.
+2. ~~Replication driver + protocol reconstruction~~ — done (PR #6); blocked Gram–Schmidt
+   completion merged after A/B validation proving unchanged results (PR #7);
+   full-catalog parallel launch tooling merged (PR #8).
+3. Monitor the running full-catalog grid (`comparisons/2026-10-08-full-grid/`, staged A → B →
+   profiles → report; per-stage logs in its `logs/` dir); review coverage gaps and manifest
+   statuses as stages complete.
+4. `perf/asebo-eigenstep`: replace ASEBO's two full `eigh(d)` per iteration with a provably
+   equivalent reduced spectrum computation (the λ-decayed covariance is numerically low-rank;
+   tail eigenvalues beyond ~30 recent gradients are below double precision); validate with an
+   A/B study like `tools/ab_gs_blocking.py`; then top up the deferred non-starred dim-1000 cells
+   with `--phase runs --side new --dims 1000 --all-functions` (resume-safe).
+5. Phase 5 planning: once Phase 4 baselines exist, scope the C + HIP/ROCm rewrite per the
+   staged outline above (kernel spec → architecture → correctness gate → acceptance).
