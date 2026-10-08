@@ -345,6 +345,40 @@ def test_gram_schmidt_drops_degenerate_seeds():
     assert abs(float(basis[0] @ e0)) == pytest.approx(1.0, abs=1e-10)
 
 
+def test_gram_schmidt_completes_partial_seeds():
+    rng = np.random.default_rng(11)
+    seeds = rng.standard_normal((2, 5))
+    basis, kept = gram_schmidt_complete(rng, seeds)
+    assert basis.shape == (5, 5)
+    assert basis @ basis.T == pytest.approx(np.eye(5), abs=1e-10)
+    assert kept.tolist() == [True, True]
+    # Completion frame lies in the complement of the kept span.
+    K = seeds[:2] / np.linalg.norm(seeds[:2], axis=1)[:, None]
+    assert np.abs(basis[2:] @ K.T).max() < 1e-10
+
+
+def test_gram_schmidt_blocked_path_matches_properties():
+    rng = np.random.default_rng(5)
+    seeds = rng.standard_normal((7, 9))
+    basis, kept = gram_schmidt_complete(rng, seeds, block_size=3)
+    assert basis.shape == (9, 9)
+    assert basis @ basis.T == pytest.approx(np.eye(9), abs=1e-10)
+    assert int(kept.sum()) == 7
+    assert np.allclose(basis[0], seeds[0] / np.linalg.norm(seeds[0]), atol=1e-12)
+
+
+def test_gram_schmidt_is_deterministic_for_fixed_stream():
+    def run(seed: int):
+        rng = np.random.default_rng(seed)
+        seeds = rng.standard_normal((3, 8))
+        return gram_schmidt_complete(rng, seeds)
+
+    basis_a, kept_a = run(7)
+    basis_b, kept_b = run(7)
+    assert np.array_equal(basis_a, basis_b)
+    assert np.array_equal(kept_a, kept_b)
+
+
 def test_history_buffer_fifo_capacity():
     buf = HistoryBuffer(capacity=3)
     for i in range(5):
