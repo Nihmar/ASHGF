@@ -1,9 +1,11 @@
-"""Thesis replication driver: More & Sugrue profiles over the starred benchmark set.
+"""Thesis replication driver: More & Sugrue profiles over the benchmark set.
 
 Protocol (faithful to ``thesis/chapters/numericalexperiments.tex`` and the original
 notebook ``original_python_code/notebook_profiles.ipynb``):
 
-* problem set: the 26 starred functions of ``original_python_code/functions.txt``;
+* problem set: by default the 26 starred functions of
+  ``original_python_code/functions.txt``; ``--all-functions`` runs the entire
+  canonical registered catalog instead;
 * dimensions {10, 100, 1000}; budgets ``mu_L`` in {1e4, ..., 1e8}; tolerances
   ``tau`` in {1e-2, ..., 1e-10};
 * every (function, dim, solver) cell is executed once with ``--maxiter`` iterations
@@ -11,7 +13,9 @@ notebook ``original_python_code/notebook_profiles.ipynb``):
   so all ``(mu, tau)`` combinations are derived offline from the stored data, with
   budget truncation equivalent to the notebook's iteration model;
 * both sides are reproduced: the new package (canonical hyperparameters) and the
-  frozen prototype through ``ashgf.parity.run_original`` (its own quirks included).
+  frozen prototype through ``ashgf.parity.run_original`` (its own quirks included);
+* the runs phase can execute cells concurrently (``--workers``); cap BLAS threads via
+  environment variables (e.g. ``OPENBLAS_NUM_THREADS``) to avoid oversubscription.
 
 Data layout written under ``--out``::
 
@@ -35,7 +39,9 @@ Resume-safe: existing run files are skipped. Phases can be run independently:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -61,7 +67,7 @@ from ashgf.algorithms import (  # noqa: E402
     GDConfig,
     SGESConfig,
 )
-from ashgf.functions import THESIS_STARRED_FUNCTIONS  # noqa: E402
+from ashgf.functions import FUNCTION_NAMES, THESIS_STARRED_FUNCTIONS  # noqa: E402
 from ashgf.profiles import (  # noqa: E402
     ALPHA_GRID_DATA,
     ALPHA_GRID_PERFORMANCE,
@@ -139,10 +145,14 @@ def status_of(values: np.ndarray, terminated_normally: bool | None) -> str:
     return "completed"
 
 
+_MANIFEST_LOCK = threading.Lock()
+
+
 def append_manifest(manifest: Path, row: dict) -> None:
-    new = not manifest.exists()
-    frame = pd.DataFrame([{c: row.get(c, np.nan) for c in MANIFEST_COLUMNS}])
-    frame.to_csv(manifest, mode="a", header=new, index=False)
+    with _MANIFEST_LOCK:
+        new = not manifest.exists()
+        frame = pd.DataFrame([{c: row.get(c, np.nan) for c in MANIFEST_COLUMNS}])
+        frame.to_csv(manifest, mode="a", header=new, index=False)
 
 
 def save_run(
@@ -223,11 +233,21 @@ def canonical_x0(seed: int, dim: int) -> np.ndarray:
     return np.random.RandomState(seed).randn(dim)
 
 
+def selected_functions(args: argparse.Namespace) -> list[str]:
+    if args.functions:
+        return list(args.functions)
+    if getattr(args, "all_functions", False):
+        return list(FUNCTION_NAMES)
+    return list(THESIS_STARRED_FUNCTIONS)
+
+
 def phase_runs(args: argparse.Namespace) -> None:
     out = Path(args.out)
-    functions = list(args.functions or THESIS_STARRED_FUNCTIONS)
+    functions = selected_functions(args)
     started = time.perf_counter()
     sides = ("new", "old") if args.side == "both" else (args.side,)
+
+    tasks: list[tuple[str, int, str, str, np.ndarray]] = []
     for side in sides:
         dims = args.dims if side == "new" else args.old_dims
         for dim in dims:
@@ -237,25 +257,37 @@ def phase_runs(args: argparse.Namespace) -> None:
                     path = run_file_path(out, side, dim, function, solver)
                     if path.exists():
                         continue
-                    t0 = time.perf_counter()
-                    try:
-                        if side == "new":
-                            meta = execute_new_cell(out, function, dim, args.maxiter, args.seed,
-                                                    x_init, solver)
-                        else:
-                            meta = execute_old_cell(out, function, dim, args.maxiter, args.seed,
-                                                    solver)
-                    except Exception as exc:  # keep going; record failure in manifest
-                        meta = {"status": f"error: {type(exc).__name__}: {exc}"}
-                        append_manifest(
-                            out / "data" / "manifest.csv",
-                            {"side": side, "dim": dim, "function": function, "solver": solver,
-                             **meta},
-                        )
-                    elapsed = time.perf_counter() - t0
-                    print(f"[{side}] dim={dim} {function} {solver}: {meta.get('status')} "
-                          f"in {elapsed:.1f}s ({meta.get('total_function_evaluations', '?')} FEs)",
-                          flush=True)
+                    tasks.append((side, dim, function, solver, x_init))
+
+    print(f"runs phase: {len(tasks)} pending cells ({len(functions)} functions, "
+          f"sides={','.join(sides)}, workers={args.workers})", flush=True)
+
+    def worker(task: tuple[str, int, str, str, np.ndarray]) -> None:
+        side, dim, function, solver, x_init = task
+        t0 = time.perf_counter()
+        try:
+            if side == "new":
+                meta = execute_new_cell(out, function, dim, args.maxiter, args.seed,
+                                        x_init, solver)
+            else:
+                meta = execute_old_cell(out, function, dim, args.maxiter, args.seed, solver)
+        except Exception as exc:  # keep going; record failure in manifest
+            meta = {"status": f"error: {type(exc).__name__}: {exc}"}
+            append_manifest(
+                out / "data" / "manifest.csv",
+                {"side": side, "dim": dim, "function": function, "solver": solver, **meta},
+            )
+        elapsed = time.perf_counter() - t0
+        print(f"[{side}] dim={dim} {function} {solver}: {meta.get('status')} "
+              f"in {elapsed:.1f}s ({meta.get('total_function_evaluations', '?')} FEs)",
+              flush=True)
+
+    if len(tasks) <= 1 or args.workers <= 1:
+        for task in tasks:
+            worker(task)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
+            list(pool.map(worker, tasks))
     print(f"runs phase finished in {time.perf_counter() - started:.1f}s", flush=True)
 
 
@@ -360,7 +392,7 @@ def compute_side_profiles(
 
 def phase_profiles(args: argparse.Namespace) -> None:
     out = Path(args.out)
-    functions = list(args.functions or THESIS_STARRED_FUNCTIONS)
+    functions = selected_functions(args)
     sides = ("new", "old") if args.side == "both" else (args.side,)
     started = time.perf_counter()
     for side in sides:
@@ -467,7 +499,7 @@ REPORT_DEVIATION_LINES = [
 
 def phase_report(args: argparse.Namespace) -> None:
     out = Path(args.out)
-    functions = list(args.functions or THESIS_STARRED_FUNCTIONS)
+    functions = selected_functions(args)
     sides = ("new", "old") if args.side == "both" else (args.side,)
     dims_by_side = {"new": args.dims, "old": args.old_dims}
 
@@ -577,6 +609,11 @@ def main() -> None:
     parser.add_argument("--budgets", type=float, nargs="+", default=DEFAULT_BUDGETS)
     parser.add_argument("--taus", type=float, nargs="+", default=DEFAULT_TAUS)
     parser.add_argument("--functions", nargs="*", default=None)
+    parser.add_argument("--all-functions", action="store_true",
+                        help="run the entire canonical registered catalog instead of the "
+                             "26 thesis-starred functions")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="worker threads for the runs phase (cap BLAS threads via env)")
     parser.add_argument("--out",
                         default=str(REPO_ROOT / "comparisons" / "2026-10-07-thesis-replication"))
     args = parser.parse_args()
