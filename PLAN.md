@@ -1,6 +1,6 @@
 # Project Plan — ASHGF Reimplementation
 
-Status: active. Last updated: 2026-10-08.
+Status: active. Last updated: 2026-10-09.
 
 This document tracks the plan to build a production-quality Python implementation of the
 algorithms in the master's thesis *"Adaptive Stochastic Historical Gradient-Free Optimization"*
@@ -242,10 +242,13 @@ for the speedup claims.
 3. Monitor the running full-catalog grid (`comparisons/2026-10-08-full-grid/`, staged A → B →
    profiles → report; per-stage logs in its `logs/` dir); review coverage gaps and manifest
    statuses as stages complete.
-4. `perf/asebo-eigenstep`: replace ASEBO's two full `eigh(d)` per iteration with a provably
-   equivalent reduced spectrum computation (the λ-decayed covariance is numerically low-rank;
-   tail eigenvalues beyond ~30 recent gradients are below double precision); validate with an
-   A/B study like `tools/ab_gs_blocking.py`; then top up the deferred non-starred dim-1000 cells
-   with `--phase runs --side new --dims 1000 --all-functions` (resume-safe).
+4. ~~`perf/asebo-eigenstep`~~ — implemented (reduced spectrum over a decaying gradient window,
+   dense path retained behind `ASEBOConfig.full_spectrum=True`) and validated by
+   `comparisons/2026-10-09-asebo-eigenstep-ab/`: unit-level spectrum/projector agreement to
+   ~3e-15 with zero rank-selection mismatches; run-level trajectories agree within floating-point
+   noise wherever the active subspace is constant, and multi-seed best-value differences sit
+   inside the normal seed spread; wall time drops 7–17x at dim 1000. Remaining: top up the
+   deferred non-starred dim-1000 cells with `--phase runs --side new --dims 1000 --all-functions`
+   once the branch lands (resume-safe).
 5. Phase 5 planning: once Phase 4 baselines exist, scope the C + HIP/ROCm rewrite per the
    staged outline above (kernel spec → architecture → correctness gate → acceptance).

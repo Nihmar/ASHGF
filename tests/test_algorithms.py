@@ -18,7 +18,14 @@ from ashgf.algorithms._common import (
     random_orthonormal_basis,
     subspace_basis,
 )
-from ashgf.algorithms.asebo import ASEBO, ASEBOConfig
+from ashgf.algorithms.asebo import (
+    ASEBO,
+    ASEBOConfig,
+    DecayedGradientWindow,
+    _active_subspace,
+    _default_window_capacity,
+    _split_from_spectrum,
+)
 from ashgf.algorithms.asgf import ASGF, ASGFConfig
 from ashgf.algorithms.ashgf import ASHGF, ASHGFConfig
 from ashgf.algorithms.random_search import GD, GDConfig
@@ -167,6 +174,114 @@ def test_asebo_fe_accounting_from_active_rank():
     assert r.total_function_evaluations == expected
     # Active rank always within [1, dim]; never exceeds full dimension.
     assert all(1 <= n <= dim for n in r.extras["active_rank"])
+
+
+def test_asebo_reduced_spectrum_matches_dense_reference():
+    """The window-restricted spectrum must reproduce the dense Cov eigen-decomposition.
+
+    A random gradient history is accumulated both ways (dense recursion vs sliding
+    window); at checkpoints we compare eigenvalues, active-rank selection across a
+    threshold grid, and the active-subspace projector.
+    """
+    rng = np.random.default_rng(99)
+    dim, t, lambd = 60, 200, 0.1
+    win = DecayedGradientWindow(lambd, _default_window_capacity(lambd))
+    cov = np.zeros((dim, dim))
+    grads = [rng.standard_normal(dim) * rng.uniform(0.5, 3.0) for _ in range(t)]
+    checkpoints = set(range(60, t, 25))
+    threshes = [1e-4, 1e-3, 1e-2, 0.1, 0.5, 0.9]
+    worst_val_rel = 0.0
+    worst_proj = 0.0
+    rank_mismatches = 0
+    for i, g in enumerate(grads, start=1):
+        cov = lambd * cov + (1.0 - lambd) * np.outer(g, g)
+        win.push(g)
+        if i not in checkpoints:
+            continue
+        ref_vals, ref_vecs = np.linalg.eigh(cov)
+        o = np.argsort(ref_vals)[::-1]
+        ref_vals, ref_vecs = ref_vals[o], ref_vecs[:, o]
+        spec = win.spectrum()
+        assert spec is not None
+        red_vals, red_vecs = spec
+        k = min(red_vals.size, dim)
+        scale = float(np.abs(ref_vals[:k]).max())
+        worst_val_rel = max(worst_val_rel, float(np.abs(red_vals[:k] - ref_vals[:k]).max() / scale))
+        for thresh in threshes:
+            _, _, r_ref = _active_subspace(cov, thresh)
+            split_red = _split_from_spectrum(red_vals, red_vecs, thresh, dim)
+            assert split_red is not None
+            u_act, r_red = split_red
+            if r_red != r_ref:
+                rank_mismatches += 1
+                continue
+            p_ref = ref_vecs[:, :r_ref] @ ref_vecs[:, :r_ref].T
+            p_red = u_act.T @ u_act
+            worst_proj = max(worst_proj, float(np.abs(p_ref - p_red).max()))
+    assert worst_val_rel < 1e-8
+    assert rank_mismatches == 0
+    assert worst_proj < 1e-6
+
+
+def test_asebo_reduced_spectrum_degenerate_window():
+    """A collinear gradient history must yield rank 1 with the right direction."""
+    rng = np.random.default_rng(7)
+    dim = 40
+    v = rng.standard_normal(dim)
+    v /= np.linalg.norm(v)
+    win = DecayedGradientWindow(0.1, _default_window_capacity(0.1))
+    for c in rng.uniform(0.2, 2.0, size=50):
+        win.push(v * c)
+    vals, vecs = win.spectrum()
+    assert vals is not None and vals[0] > 0.0
+    assert vals[0] / vals.sum() > 1.0 - 1e-9
+    u_act, r = _split_from_spectrum(vals, vecs, 1e-4, dim)
+    assert r == 1
+    cos = abs(float(u_act[0] @ v))
+    assert cos > 1.0 - 1e-8
+
+
+def test_asebo_window_capacity_scaling():
+    assert _default_window_capacity(0.1) == 30
+    assert _default_window_capacity(0.5) >= 50
+    with pytest.raises(ValueError):
+        _default_window_capacity(1.0)
+    with pytest.raises(ValueError):
+        _default_window_capacity(0.0)
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_asebo_full_spectrum_flag_smoke(full):
+    """Both spectral paths run cleanly; FE accounting follows each path's own ranks."""
+    cfg = ASEBOConfig(function="sphere", dim=8, maxiter=60, seed=21, l_full=10, full_spectrum=full)
+    r = ASEBO(cfg).run()
+    n_t = [cfg.dim] * cfg.l_full + [int(v) for v in r.extras["active_rank"]]
+    expected = 1 + sum(2 * n + 1 for n in n_t)
+    assert r.total_function_evaluations == expected
+    assert np.all(np.isfinite(r.iterates))
+    assert r.best_value < r.values[0]
+
+
+def test_asebo_perpendicular_projection_sampling_marginal():
+    """Projected ambient Gaussians must match N(0, P_perp) up to the chi-square scaling.
+
+    dirs = sqrt(d/(d-r)) * P_perp z,  z ~ N(0, I_d), must have mean 0 and covariance
+    (d/(d-r)) P_perp — the same law as drawing coefficients in a complement basis.
+    """
+    rng = np.random.default_rng(3)
+    dim, r, N = 20, 5, 50000
+    Q, _ = np.linalg.qr(rng.standard_normal((dim, dim)))
+    u_act = Q[:, :r].T.copy()
+    z = rng.standard_normal((N, dim))
+    proj = z - (z @ u_act.T) @ u_act
+    scale = np.sqrt(dim / (dim - r))
+    dirs = proj * scale
+    P_perp = np.eye(dim) - u_act.T @ u_act
+    cov_emp = (dirs.T @ dirs) / (N - 1)
+    target = scale**2 * P_perp
+    rel_err = float(np.linalg.norm(cov_emp - target) / np.linalg.norm(target))
+    assert rel_err < 0.1
+    assert float(np.abs(dirs.mean(axis=0)).max()) < 0.1 * scale
 
 
 # ---------------------------------------------------------------------------
