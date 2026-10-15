@@ -1,0 +1,2 @@
+# `data/` is a junction to the shared run data (../data); never traverse or commit it.
+data/

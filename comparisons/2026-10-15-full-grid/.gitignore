@@ -1,0 +1,5 @@
+# Raw per-cell run archives (data/{new,old}/*.npz) are regenerable via launch.ps1
+# (resume-safe) and are intentionally not versioned; the manifest and the analysis
+# outputs (report, figures, tables) are.
+data/**/*.npz
+logs/
