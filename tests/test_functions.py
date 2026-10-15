@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import collections.abc
 import math
+import typing
 
 import numpy as np
 import pytest
@@ -18,6 +20,15 @@ from ashgf.functions import (
 
 def _random_points(rng: np.random.Generator, n: int, d: int) -> np.ndarray:
     return rng.uniform(-1.0, 1.0, size=(n, d))
+
+
+def test_vectorized_fn_alias_is_resolvable() -> None:
+    """The alias must be a real ``Callable`` so annotation resolution works (#12)."""
+    import ashgf.functions as fns
+
+    resolved = typing.get_type_hints(fns)
+    assert resolved
+    assert typing.get_origin(fns.VectorizedFn) is collections.abc.Callable
 
 
 @pytest.mark.parametrize("name", FUNCTION_NAMES)
