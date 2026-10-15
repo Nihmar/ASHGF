@@ -30,7 +30,7 @@ from ashgf.algorithms.asgf import ASGF, ASGFConfig
 from ashgf.algorithms.ashgf import ASHGF, ASHGFConfig
 from ashgf.algorithms.random_search import GD, GDConfig
 from ashgf.algorithms.sges import SGES, SGESConfig
-from ashgf.quadrature import GHQuadrature
+from ashgf.quadrature import DGSEstimate, GHQuadrature
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -164,6 +164,52 @@ def test_ashgf_fe_accounting():
     assert r.total_function_evaluations == 1 + iters * (dim * (m - 1) + 1)
 
 
+def test_asgf_l_g_uses_max_all_until_previous_gradient_is_pinned(monkeypatch):
+    """Issue #16: after a reset the basis is fully random again, so L_G must fall back
+    to the max over all directions (thesis rule) instead of ``L_0`` of the random basis
+    (the frozen prototype always used ``L_0``)."""
+    import ashgf.algorithms.asgf as asgf_mod
+
+    dim, m = 4, 5
+    lip = np.array([1.0, 5.0, 3.0, 2.0])  # max 5.0, index 0 is 1.0 -> distinguishable
+
+    def fake_estimate(f, x, basis, sigma, quad, f_x=None, legacy_rule=False):
+        return DGSEstimate(
+            gradient=np.eye(dim)[0],
+            directional_derivatives=np.zeros(dim),
+            lipschitz_constants=lip.copy(),
+            directional_values=np.zeros((m, dim)),
+            n_function_evaluations=0,
+        )
+
+    monkeypatch.setattr(asgf_mod, "dgs_gradient_estimate", fake_estimate)
+    cfg = ASGFConfig(
+        function="sphere", dim=dim, maxiter=3, seed=1, m=m, gamma_l=0.9,
+        resets=1, rho=1e12, eps=1e-30,
+    )
+    r = ASGF(cfg).run()
+    l_nabla = r.extras["l_nabla"]
+    # Step 0: no pinned direction -> L_G = max(lip) = 5 -> L_nabla = 0.1*5 = 0.5; reset fires.
+    # Step 1: fresh random basis -> L_G = max(lip) = 5 again -> 0.1*5 + 0.9*0.5 = 0.95.
+    # Step 2: step 1 pinned the previous gradient -> L_G = lip[0] = 1 -> 0.1*1 + 0.9*0.95 = 0.955.
+    assert l_nabla == pytest.approx([0.5, 0.95, 0.955])
+
+
+def test_ashgf_alpha_increases_right_after_reset():
+    """Issue #16: right after a reset no historical direction exists, so the thesis rule
+    ("r_hat_G missing -> increase alpha") must apply; the frozen prototype adapted
+    against a bogus ``M = d//2`` split instead."""
+    cfg = ASHGFConfig(
+        function="sphere", dim=6, maxiter=4, seed=7, t_warmup=1, k=4,
+        resets=1, rho=1e12, eps=1e-30,
+    )
+    r = ASHGF(cfg).run()
+    alphas = r.extras["alpha"]
+    # Step 0 is warm-up (reset fires at its end). Step 1 runs on the fresh random basis
+    # with zero historical slots: alpha = min(1.1*0.5, 0.9) = 0.55.
+    assert alphas[0] == pytest.approx(0.55)
+
+
 def test_asebo_fe_accounting_from_active_rank():
     dim, l_full, iters = 5, 8, 25
     cfg = ASEBOConfig(function="sphere", dim=dim, maxiter=iters, seed=5, l_full=l_full, eps=1e-30)
@@ -260,6 +306,27 @@ def test_asebo_full_spectrum_flag_smoke(full):
     assert r.total_function_evaluations == expected
     assert np.all(np.isfinite(r.iterates))
     assert r.best_value < r.values[0]
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_asebo_active_rank_recorded_when_split_missing(monkeypatch, full):
+    """The isotropic fallback (no active subspace split) must still record the
+    per-iteration direction count, keeping ``active_rank`` aligned (issue #14)."""
+    import ashgf.algorithms.asebo as asebo_mod
+
+    monkeypatch.setattr(asebo_mod, "_active_subspace", lambda cov, thresh: None)
+    monkeypatch.setattr(asebo_mod, "_split_from_spectrum", lambda *args, **kwargs: None)
+
+    dim, l_full, iters = 5, 4, 12
+    cfg = ASEBOConfig(
+        function="sphere", dim=dim, maxiter=iters, seed=3, l_full=l_full,
+        full_spectrum=full, eps=1e-30,
+    )
+    r = ASEBO(cfg).run()
+    ranks = r.extras["active_rank"]
+    assert ranks.shape == (iters - l_full,)
+    assert np.all(ranks == dim)
+    assert r.total_function_evaluations == 1 + iters * (2 * dim + 1)
 
 
 def test_asebo_perpendicular_projection_sampling_marginal():

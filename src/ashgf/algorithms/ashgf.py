@@ -12,7 +12,8 @@ Implements Algorithm "ASHGF" + "Parameter update" from
 * The DGS estimator uses m Gauss-Hermite points per direction (same m for historical and
   random directions, as prescribed by the thesis).
 * L_nabla follows the momentum recursion with L_G = max over all local constants during
-  warm-up and max over the M historical directions afterwards.
+  warm-up and whenever the current basis contains no historical direction (e.g. right
+  after a reset), and max over the M historical directions otherwise.
 * lambda = sigma / L_nabla; sigma adapts through the threshold subroutine with r resets.
 * The exploitation probability alpha is adapted after every post-warm-up iteration by
   comparing, per direction slot, the best observed quadrature value min_k F(x + s p_k xi_j):
@@ -28,7 +29,14 @@ Deviations of the frozen prototype (documented; parity studies in ``comparisons/
   thesis says L_G is the maximum over ALL local constants until T_w -- we follow the
   thesis;
 * its SVD-based ``orth()`` mixes rows after sampling, losing historical attribution;
-  our Gram-Schmidt construction keeps the first M directions inside L_G exactly.
+  our Gram-Schmidt construction keeps the first M directions inside L_G exactly;
+* its historical draw uses probability ``1 - alpha`` for the subspace sample (it counts
+  the ``1`` draws of ``p=[alpha, 1-alpha]``), opposite to the thesis equation where
+  directions are historical with probability ``alpha``, so its adaptation moves the
+  historical fraction the wrong way;
+* after a reset it still adapts alpha against a bogus ``M = d//2`` split of the
+  evaluations; we apply the thesis rule instead (no historical slots exist right after a
+  reset, so alpha is increased).
 """
 
 from __future__ import annotations
@@ -135,7 +143,8 @@ class ASHGF:
         )
         buffer = HistoryBuffer(cfg.k)
         basis = random_orthonormal_basis(rng, cfg.dim)
-        hist_count: dict[str, object] = {"current": None}  # M for current basis (None in warm-up)
+        # M of current basis: None during warm-up, 0 right after a reset.
+        hist_count: dict[str, int | None] = {"current": None}
         alpha_state = {"alpha": cfg.alpha}
         alphas: list[float] = []
         sigmas: list[float] = []
@@ -181,7 +190,12 @@ class ASHGF:
             # Parameter update: reset check, then rebuild next direction set.
             reset = state.adapt(est.directional_derivatives, est.lipschitz_constants)
             next_historical = (i + 1) >= cfg.t_warmup and not reset
-            if reset or not next_historical:
+            if reset:
+                basis = random_orthonormal_basis(rng, cfg.dim)
+                # Reset basis has no historical direction: r_hat_G will not exist, so
+                # the thesis alpha rule applies (increase) at the next iteration.
+                hist_count["current"] = 0
+            elif not next_historical:
                 basis = random_orthonormal_basis(rng, cfg.dim)
                 hist_count["current"] = None
             else:
