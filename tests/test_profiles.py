@@ -46,6 +46,15 @@ class TestTrajectory:
         # Budget below the first iterate keeps only x_0.
         assert traj.truncate_by_budget(1).values.tolist() == [10.0]
 
+    def test_truncate_by_budget_below_initial_fes_raises(self):
+        traj = make_traj([10.0, 8.0], [21, 41])
+        with pytest.raises(ValueError, match="initial evaluation count"):
+            traj.truncate_by_budget(20)
+
+    def test_empty_trajectory_rejected(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            make_traj([], [])
+
 
 class TestConvergenceFe:
     TRAJ = make_traj([10.0, 8.0, 6.0, 5.0], [1, 21, 41, 61])

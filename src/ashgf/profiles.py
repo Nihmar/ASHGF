@@ -62,6 +62,8 @@ class Trajectory:
     def __post_init__(self) -> None:
         if len(self.values) != len(self.fes):
             raise ValueError("values and fes must be aligned")
+        if len(self.fes) == 0:
+            raise ValueError("trajectory must not be empty")
         if self.fes[0] < 1 or not np.all(np.diff(self.fes) >= 0):
             raise ValueError("fes must start at >= 1 and be non-decreasing")
 
@@ -70,8 +72,19 @@ class Trajectory:
         return float(self.values[0])
 
     def truncate_by_budget(self, mu: float) -> Trajectory:
-        """Keep only the iterates affordable within ``mu`` total evaluations."""
+        """Keep only the iterates affordable within ``mu`` total evaluations.
+
+        Raises
+        ------
+        ValueError
+            If ``mu`` is below the initial evaluation count, which would leave an
+            empty (meaningless) trajectory.
+        """
         mask = self.fes <= mu
+        if not mask.any():
+            raise ValueError(
+                f"budget mu={mu} is below the initial evaluation count {int(self.fes[0])}"
+            )
         return Trajectory(
             solver=self.solver,
             function=self.function,
