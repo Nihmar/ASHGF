@@ -23,7 +23,13 @@ Deviations of the frozen prototype (documented, reproducible via parity studies)
   pair set I;
 * after assigning the pinned direction it re-orthonormalizes ALL rows with an SVD-based
   ``orth()``, which mixes the rows and loses exact pinning; we pin exactly via
-  Gram-Schmidt completion instead.
+  Gram-Schmidt completion instead;
+* it always feeds ``L_0`` of the current basis to the L_nabla recursion, even when
+  direction 0 is random (very first estimate and the single estimate after a reset); we
+  follow the thesis rule instead -- maxima over all directions while no direction sampled
+  from L_G exists, ``L_0`` only once the previous gradient is pinned;
+* on a numerically zero gradient it divides by zero inside the basis update (the blanket
+  ``except`` then ends the run); we skip pinning and keep the previous basis.
 """
 
 from __future__ import annotations
@@ -129,19 +135,19 @@ class ASGF:
             rho=cfg.rho,
         )
         basis = random_orthonormal_basis(rng, cfg.dim)
-        prev_grad: NDArray[np.float64] | None = None
+        pinned = False
         sigmas: list[float] = []
         l_nablas: list[float] = []
 
         def step(i: int, x: NDArray[np.float64], value: float) -> tuple[NDArray[np.float64], float]:
-            nonlocal basis, prev_grad
+            nonlocal basis, pinned
             est = dgs_gradient_estimate(f, x, basis, state.sigma, quad, f_x=value,
                                         legacy_rule=cfg.legacy_rule)
-            # L_G: all directions before pinning exists, then the pinned one.
-            if prev_grad is None:
-                l_g = float(np.max(est.lipschitz_constants))
-            else:
+            # L_G: max over all directions whenever no direction from L_G is present.
+            if pinned:
                 l_g = float(est.lipschitz_constants[0])
+            else:
+                l_g = float(np.max(est.lipschitz_constants))
             state.update_lipschitz_momentum(l_g)
             lr = state.learning_rate
 
@@ -153,11 +159,12 @@ class ASGF:
             g_norm = float(np.linalg.norm(est.gradient))
             if reset:
                 basis = random_orthonormal_basis(rng, cfg.dim)
+                pinned = False
             elif g_norm > 1e-12:
                 first = est.gradient / g_norm
                 seeds = np.vstack([first, rng.standard_normal((cfg.dim - 1, cfg.dim))])
                 basis, _ = gram_schmidt_complete(rng, seeds)
-            prev_grad = est.gradient
+                pinned = True
             sigmas.append(state.sigma)
             l_nablas.append(state.l_nabla)
             return x_new, v_new

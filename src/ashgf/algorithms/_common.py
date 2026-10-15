@@ -22,6 +22,10 @@ from numpy.typing import NDArray
 
 from ..functions import CountingFunction, get_function
 
+#: Random source accepted by the shared layer: a modern ``np.random.Generator`` or a
+#: legacy ``np.random.RandomState`` (used by parity studies of the frozen prototype).
+RngLike = np.random.Generator | np.random.RandomState
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -59,7 +63,7 @@ class BaseRunConfig:
     maxiter: int
     seed: int
     eps: float = 1e-8
-    rng: np.random.Generator | np.random.RandomState | None = field(
+    rng: RngLike | None = field(
         default=None, compare=False, repr=False
     )
     x_init: NDArray[np.float64] | None = None
@@ -132,7 +136,7 @@ def make_objective(
     return "custom", CountingFunction(function)
 
 
-def random_orthonormal_basis(rng: np.random.Generator, dim: int) -> NDArray[np.float64]:
+def random_orthonormal_basis(rng: RngLike, dim: int) -> NDArray[np.float64]:
     """A Haar-uniform orthonormal basis of R^d as a matrix whose rows are unit vectors."""
     Q, _ = np.linalg.qr(rng.standard_normal((dim, dim)))
     return Q
@@ -207,7 +211,7 @@ def subspace_basis(matrix: NDArray[np.float64]) -> NDArray[np.float64]:
 
 
 def gram_schmidt_complete(
-    rng: np.random.Generator,
+    rng: RngLike,
     seeds: NDArray[np.float64],
     block_size: int = 64,
 ) -> tuple[NDArray[np.float64], NDArray[np.bool_]]:
@@ -287,7 +291,7 @@ def gram_schmidt_complete(
 
 def build_context(
     config: BaseRunConfig,
-) -> tuple[str, CountingFunction, np.random.Generator | np.random.RandomState]:
+) -> tuple[str, CountingFunction, RngLike]:
     """Resolve the objective wrapper and the single run-level RNG."""
     name, f = make_objective(config.function)
     rng = config.rng if config.rng is not None else np.random.default_rng(config.seed)
@@ -298,7 +302,7 @@ def drive_run(
     config: BaseRunConfig,
     name: str,
     f: CountingFunction,
-    rng: np.random.Generator,
+    rng: RngLike,
     step_fn: Callable[[int, NDArray[np.float64], float], tuple[NDArray[np.float64], float]],
     start_x: NDArray[np.float64] | None = None,
 ) -> RunResult:

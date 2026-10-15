@@ -20,11 +20,13 @@ Conventions
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 from numpy.typing import NDArray
 
 # Type alias: a vectorized objective taking points of shape (..., dim) -> (...,).
-VectorizedFn = "callable[[NDArray[np.float64]], NDArray[np.float64]]"
+VectorizedFn = Callable[[NDArray[np.float64]], NDArray[np.float64]]
 
 
 def _pair_split(x: NDArray[np.float64]) -> tuple[NDArray[np.float64], NDArray[np.float64]]:

@@ -237,6 +237,8 @@ class ASEBO:
                 if split is None:
                     dirs = rng.standard_normal((d, d))
                     n_t = d
+                    if use_subspace:
+                        ranks.append(n_t)
                 else:
                     u_act, u_perp, r = split
                     n_t = r
@@ -261,6 +263,7 @@ class ASEBO:
                 if split is None:
                     dirs = rng.standard_normal((d, d))
                     n_t = d
+                    ranks.append(n_t)
                 else:
                     dirs, n_t = sample_dirs(split[0], split[1])
 
