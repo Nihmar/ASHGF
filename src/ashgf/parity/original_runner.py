@@ -19,7 +19,13 @@ Documented quirks of the prototype surfaced here:
   seeds unless ``x_init`` and the direction stream are aligned explicitly;
 * no internal function-evaluation counter (added here);
 * mutable class-level ``data`` dicts in ASGF/ASHGF shared across instances
-  (restored after each run when overrides are applied).
+  (restored after each run when overrides are applied);
+* process-global state (the class-wide ``evaluate`` patch above, the global RNG,
+  the class-level ``data`` dicts, stdout redirection) makes concurrent runs
+  unsafe; :func:`run_original` therefore serializes calls behind a module-level
+  lock so results equal serial execution;
+* the loader leaves the prototype ``functions`` module registered under
+  ``sys.modules["functions"]`` (shared by every prototype module).
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ import importlib.util
 import io
 import os
 import sys
+import threading
 import time
 import types
 from dataclasses import dataclass
@@ -136,6 +143,14 @@ def _load_original_module(name: str, directory: Path):
     return module
 
 
+#: Serializes frozen-prototype runs. The prototype owns process-global state (the
+#: class-wide ``Function.evaluate`` patch, the global numpy RNG it seeds, mutable
+#: class-level ``data`` dicts, and ``contextlib.redirect_stdout``), so concurrent
+#: calls interleave it and corrupt results (measured: ~2x inflated FE counts and
+#: divergent trajectories with two threads). Every call takes this lock.
+_RUN_LOCK = threading.Lock()
+
+
 def run_original(
     algorithm: str,
     *,
@@ -161,7 +176,40 @@ def run_original(
     data_overrides:
         Temporary overrides of the mutable class-level ``data`` dict used by
         ASGF/ASHGF (restored afterwards).
+
+    Notes
+    -----
+    Calls are serialized behind a module-level lock: the prototype relies on
+    process-global state, so concurrent invocations are unsafe. Results always
+    equal serial execution; throughput is one old-side run at a time.
     """
+    with _RUN_LOCK:
+        return _run_original_impl(
+            algorithm,
+            function=function,
+            dim=dim,
+            it=it,
+            seed=seed,
+            x_init=x_init,
+            eps=eps,
+            ctor_params=ctor_params,
+            data_overrides=data_overrides,
+        )
+
+
+def _run_original_impl(
+    algorithm: str,
+    *,
+    function: str,
+    dim: int,
+    it: int,
+    seed: int,
+    x_init: NDArray[np.float64] | None,
+    eps: float,
+    ctor_params: dict[str, float | int] | None,
+    data_overrides: dict[str, float | int] | None,
+) -> OriginalRecord:
+    """Unserialized body of :func:`run_original`; requires the module run lock."""
     if algorithm not in ORIGINAL_ALGORITHMS:
         raise ValueError(f"unknown algorithm {algorithm!r}; expected one of {ORIGINAL_ALGORITHMS}")
     directory = _original_dir()

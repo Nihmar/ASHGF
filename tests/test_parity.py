@@ -8,6 +8,9 @@ bit-close trajectory agreement.
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pytest
 
@@ -50,6 +53,36 @@ def test_original_deterministic_given_seed(algorithm):
     r2 = run_original(algorithm, **kwargs)
     assert r1.values == r2.values
     assert r1.total_function_evaluations == r2.total_function_evaluations
+
+
+def test_run_original_is_thread_safe():
+    """Concurrent ``run_original`` calls must match serial execution exactly.
+
+    The frozen prototype relies on process-global state (shared ``Function``
+    class patched class-wide, global numpy RNG, class-level ``data`` dicts,
+    stdout redirection); before the adapter serialized calls behind its module
+    lock, barrier-synchronized threads produced corrupted FE counts (~2x) and
+    divergent trajectories. Regression guard for issue #11.
+    """
+    kwargs = {"function": "sphere", "dim": 10, "it": 1000, "seed": 2003, "eps": 1e-30}
+    baseline = run_original("gd", **kwargs)
+    assert baseline.total_function_evaluations == 1 + 1000 * (2 * 10 + 1)
+
+    n_threads = 4
+    barrier = threading.Barrier(n_threads)
+
+    def worker():
+        barrier.wait()
+        return run_original("gd", **kwargs)
+
+    with ThreadPoolExecutor(max_workers=n_threads) as pool:
+        futures = [pool.submit(worker) for _ in range(n_threads)]
+        records = [f.result() for f in futures]
+
+    for rec in records:
+        assert rec.terminated_normally
+        assert rec.total_function_evaluations == baseline.total_function_evaluations
+        assert rec.values == baseline.values
 
 
 # ---------------------------------------------------------------------------
